@@ -1,17 +1,51 @@
-DROP TABLE IF EXISTS stock_feature_base;
+SET
+    @WINDOW := 60;
 
-CREATE TEMPORARY TABLE stock_feature_base AS WITH base AS (
+SET
+    @HORIZON := 5;
+
+SET
+    @TRAIN_RATIO := 0.8;
+
+SET
+    @MIN_STEP := 520;
+
+DELETE FROM
+    stock_profiles
+WHERE
+    stock_code IN (
+        SELECT
+            stock_profile
+        FROM
+            stock_data
+        GROUP BY
+            stock_profile
+        HAVING
+            MAX(timestamp) != (
+                SELECT
+                    MAX(timestamp)
+                FROM
+                    stock_data
+            )
+    );
+
+DROP TABLE IF EXISTS stock_return_base;
+
+CREATE TEMPORARY TABLE stock_return_base AS WITH base AS (
     SELECT
         s.stock_profile,
         s.timestamp,
         s.close,
         s.previous,
-        s.open_price,
+        CASE
+            WHEN s.open_price = 0
+            AND s.previous != 0 THEN s.previous
+            ELSE s.open_price
+        END AS open_price,
         s.high,
         s.low,
         s.volume,
         s.value,
-        s.frequency,
         s.tradeble_shares,
         s.foreign_buy,
         s.foreign_sell,
@@ -24,9 +58,26 @@ CREATE TEMPORARY TABLE stock_feature_base AS WITH base AS (
         (s.close / LAG(s.close, 5) OVER w) - 1 AS ret_5d,
         (s.close / LAG(s.close, 20) OVER w) - 1 AS ret_20d,
         -- price action
-        (s.open_price - s.previous) / NULLIF(s.previous, 0) AS gap,
+        (
+            CASE
+                WHEN s.open_price = 0
+                AND s.previous != 0 THEN s.previous
+                ELSE s.open_price
+            END - s.previous
+        ) / NULLIF(s.previous, 0) AS gap,
         (s.high - s.low) / NULLIF(s.previous, 0) AS intraday_range,
-        (s.close - s.low) / NULLIF(s.high - s.low, 0) AS close_position
+        CASE
+            WHEN s.high != s.low THEN (s.close - s.low) / NULLIF(s.high - s.low, 0)
+            ELSE 0.5
+        END AS close_position,
+        ROW_NUMBER() OVER (
+            PARTITION BY s.stock_profile
+            ORDER BY
+                s.timestamp DESC
+        ) AS step_count,
+        COUNT(*) OVER (PARTITION BY s.stock_profile) as total_step,
+        -- future return target
+        (LEAD(s.close, @HORIZON) OVER w / s.close) - 1 AS future_return_5d
     FROM
         stock_data s WINDOW w AS (
             PARTITION BY s.stock_profile
@@ -37,34 +88,42 @@ CREATE TEMPORARY TABLE stock_feature_base AS WITH base AS (
 SELECT
     *
 FROM
-    base;
+    base
+WHERE
+    future_return_5d IS NOT NULL
+    AND total_step >= @MIN_STEP
+    AND step_count < (total_step -120);
 
-DROP TABLE IF EXISTS stock_feature_vol;
+DROP TABLE IF EXISTS stock_vol_target;
 
-CREATE TEMPORARY TABLE stock_feature_vol AS
+CREATE TEMPORARY TABLE stock_vol_target AS
 SELECT
     *,
-    STDDEV_SAMP(ret_1d) OVER w5 AS vol_5,
-    STDDEV_SAMP(ret_1d) OVER w20 AS vol_20,
-    STDDEV_SAMP(ret_1d) OVER w60 AS vol_60,
-    close / MAX(close) OVER w120 - 1 AS drawdown
-FROM
-    stock_feature_base WINDOW w5 AS (
+    STDDEV_SAMP(ret_1d) OVER (
         PARTITION BY stock_profile
         ORDER BY
-            timestamp ROWS BETWEEN 4 PRECEDING
-            AND CURRENT ROW
-    ),
-    w20 AS (
+            timestamp ROWS BETWEEN 1 FOLLOWING
+            AND 20 FOLLOWING
+    ) AS future_vol_20d
+FROM
+    stock_return_base;
+
+DROP TABLE IF EXISTS stock_return_features;
+
+CREATE TEMPORARY TABLE stock_return_features AS
+SELECT
+    *,
+    STDDEV_SAMP(ret_1d) OVER w20 AS vol_20,
+    close / MAX(close) OVER w120 - 1 AS drawdown,
+    volume / NULLIF(tradeble_shares, 0) AS turnover,
+    (foreign_buy - foreign_sell) / NULLIF(volume, 0) AS foreign_flow,
+    (bid_volume - offer_volume) / NULLIF(bid_volume + offer_volume, 0) AS order_imbalance,
+    (offer - bid) / NULLIF(close, 0) AS spread_proxy
+FROM
+    stock_return_base WINDOW w20 AS (
         PARTITION BY stock_profile
         ORDER BY
             timestamp ROWS BETWEEN 19 PRECEDING
-            AND CURRENT ROW
-    ),
-    w60 AS (
-        PARTITION BY stock_profile
-        ORDER BY
-            timestamp ROWS BETWEEN 59 PRECEDING
             AND CURRENT ROW
     ),
     w120 AS (
@@ -74,68 +133,9 @@ FROM
             AND CURRENT ROW
     );
 
-DROP TABLE IF EXISTS stock_feature_liquidity;
+DROP TABLE IF EXISTS stock_return_features_cal;
 
-CREATE TEMPORARY TABLE stock_feature_liquidity AS
-SELECT
-    *,
-    value AS dollar_volume,
-    volume / NULLIF(tradeble_shares, 0) AS turnover,
-    (volume - AVG(volume) OVER w20) / NULLIF(STDDEV_SAMP(volume) OVER w20, 0) AS volume_z,
-    (foreign_buy - foreign_sell) / NULLIF(volume, 0) AS foreign_flow,
-    (bid_volume - offer_volume) / NULLIF(bid_volume + offer_volume, 0) AS order_imbalance,
-    (offer - bid) / NULLIF(close, 0) AS spread_proxy
-FROM
-    stock_feature_vol WINDOW w20 AS (
-        PARTITION BY stock_profile
-        ORDER BY
-            timestamp ROWS BETWEEN 19 PRECEDING
-            AND CURRENT ROW
-    );
-
-DROP TABLE IF EXISTS stock_feature_market;
-
-CREATE TEMPORARY TABLE stock_feature_market AS WITH joined AS (
-    SELECT
-        s.*,
-        i.close AS index_close,
-        (
-            i.close - LAG(i.close, 1) OVER (
-                ORDER BY
-                    i.timestamp
-            )
-        ) / NULLIF(
-            LAG(i.close, 1) OVER (
-                ORDER BY
-                    i.timestamp
-            ),
-            0
-        ) AS index_ret_1d
-    FROM
-        stock_feature_liquidity s
-        JOIN index_data i ON s.timestamp = i.timestamp
-)
-SELECT
-    *,
-    ret_5d - (
-        index_close / LAG(index_close, 5) OVER (
-            ORDER BY
-                timestamp
-        ) - 1
-    ) AS rel_ret_5,
-    STDDEV_SAMP(ret_1d) OVER w20 / NULLIF(STDDEV_SAMP(index_ret_1d) OVER w20, 0) AS rel_vol,
-    CORR(ret_1d, index_ret_1d) OVER w20 AS corr_20
-FROM
-    joined WINDOW w20 AS (
-        PARTITION BY stock_profile
-        ORDER BY
-            timestamp ROWS BETWEEN 19 PRECEDING
-            AND CURRENT ROW
-    );
-
-DROP TABLE IF EXISTS stock_feature_calendar;
-
-CREATE TEMPORARY TABLE stock_feature_calendar AS
+CREATE TEMPORARY TABLE stock_return_features_cal AS
 SELECT
     *,
     SIN(2 * PI() * DAYOFWEEK(timestamp) / 7) AS dow_sin,
@@ -145,5 +145,145 @@ SELECT
     SIN(2 * PI() * MONTH(timestamp) / 12) AS month_sin,
     COS(2 * PI() * MONTH(timestamp) / 12) AS month_cos
 FROM
-    stock_feature_market;
+    stock_return_features;
 
+DROP TABLE IF EXISTS stock_return_normalized;
+
+CREATE TEMPORARY TABLE stock_return_normalized AS
+SELECT
+    stock_profile,
+    timestamp,
+    -- normalized inputs
+    PERCENT_RANK() OVER (
+        PARTITION BY timestamp
+        ORDER BY
+            ret_1d
+    ) AS ret_1d_n,
+    PERCENT_RANK() OVER (
+        PARTITION BY timestamp
+        ORDER BY
+            ret_5d
+    ) AS ret_5d_n,
+    PERCENT_RANK() OVER (
+        PARTITION BY timestamp
+        ORDER BY
+            ret_20d
+    ) AS ret_20d_n,
+    PERCENT_RANK() OVER (
+        PARTITION BY timestamp
+        ORDER BY
+            gap
+    ) AS gap_n,
+    PERCENT_RANK() OVER (
+        PARTITION BY timestamp
+        ORDER BY
+            intraday_range
+    ) AS intraday_range_n,
+    close_position,
+    PERCENT_RANK() OVER (
+        PARTITION BY timestamp
+        ORDER BY
+            vol_20
+    ) AS vol_20_n,
+    PERCENT_RANK() OVER (
+        PARTITION BY timestamp
+        ORDER BY
+            drawdown
+    ) AS drawdown_n,
+    PERCENT_RANK() OVER (
+        PARTITION BY timestamp
+        ORDER BY
+            turnover
+    ) AS turnover_n,
+    PERCENT_RANK() OVER (
+        PARTITION BY timestamp
+        ORDER BY
+            foreign_flow
+    ) AS foreign_flow_n,
+    PERCENT_RANK() OVER (
+        PARTITION BY timestamp
+        ORDER BY
+            order_imbalance
+    ) AS order_imbalance_n,
+    PERCENT_RANK() OVER (
+        PARTITION BY timestamp
+        ORDER BY
+            spread_proxy
+    ) AS spread_n,
+    dow_sin,
+    dow_cos,
+    woy_sin,
+    woy_cos,
+    month_sin,
+    month_cos,
+    ROW_NUMBER() OVER (
+        PARTITION BY stock_profile
+        ORDER BY
+            timestamp DESC
+    ) AS step_count,
+    COUNT(*) OVER (PARTITION BY stock_profile) as total_step,
+    future_return_5d
+FROM
+    stock_return_features_cal;
+
+DROP TABLE IF EXISTS stock_return_train;
+
+DROP TABLE IF EXISTS stock_return_val;
+
+CREATE TABLE stock_return_train AS
+SELECT
+    stock_profile,
+    timestamp,
+    -- normalized inputs
+    ret_1d_n,
+    ret_5d_n,
+    ret_20d_n,
+    gap_n,
+    intraday_range_n,
+    close_position,
+    vol_20_n,
+    drawdown_n,
+    turnover_n,
+    foreign_flow_n,
+    order_imbalance_n,
+    spread_n,
+    dow_sin,
+    dow_cos,
+    woy_sin,
+    woy_cos,
+    month_sin,
+    month_cos,
+    future_return_5d
+FROM
+    stock_return_normalized
+WHERE
+    step_count > ROUND(total_step * @TRAIN_RATIO, 0);
+
+CREATE TABLE stock_return_val AS
+SELECT
+    stock_profile,
+    timestamp,
+    -- normalized inputs
+    ret_1d_n,
+    ret_5d_n,
+    ret_20d_n,
+    gap_n,
+    intraday_range_n,
+    close_position,
+    vol_20_n,
+    drawdown_n,
+    turnover_n,
+    foreign_flow_n,
+    order_imbalance_n,
+    spread_n,
+    dow_sin,
+    dow_cos,
+    woy_sin,
+    woy_cos,
+    month_sin,
+    month_cos,
+    future_return_5d
+FROM
+    stock_return_normalized
+WHERE
+    step_count <= ROUND(total_step * @TRAIN_RATIO, 0);

@@ -1,1 +1,1 @@
-pip install sqlalchemy pymysql cryptography xgboost keras pandas numpy tensorflow scikit-learn
+pip install sqlalchemy pymysql cryptography xgboost keras pandas numpy tensorflow scikit-learn keras-tcn openpyxl

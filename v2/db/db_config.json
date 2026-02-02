@@ -1,6 +1,6 @@
 {
-  "user": "root",
+  "user": "wsluser",
   "password": "password",
-  "host": "localhost",
+  "host": "192.168.1.12",
   "database": "idx"
 }

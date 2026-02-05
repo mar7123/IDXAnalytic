@@ -5,7 +5,7 @@ SET
     @HORIZON := 5;
 
 SET
-    @TRAIN_RATIO := 0.8;
+    @VAL_RATIO := 0.2;
 
 SET
     @MIN_STEP := 520;
@@ -94,20 +94,6 @@ WHERE
     AND total_step >= @MIN_STEP
     AND step_count < (total_step -120);
 
-DROP TABLE IF EXISTS stock_vol_target;
-
-CREATE TEMPORARY TABLE stock_vol_target AS
-SELECT
-    *,
-    STDDEV_SAMP(ret_1d) OVER (
-        PARTITION BY stock_profile
-        ORDER BY
-            timestamp ROWS BETWEEN 1 FOLLOWING
-            AND 20 FOLLOWING
-    ) AS future_vol_20d
-FROM
-    stock_return_base;
-
 DROP TABLE IF EXISTS stock_return_features;
 
 CREATE TEMPORARY TABLE stock_return_features AS
@@ -133,6 +119,71 @@ FROM
             AND CURRENT ROW
     );
 
+DROP TABLE IF EXISTS stock_vol_target;
+
+CREATE TEMPORARY TABLE stock_vol_target AS WITH base AS (
+    SELECT
+        stock_profile,
+        timestamp,
+        STDDEV_SAMP(ret_1d) OVER (
+            PARTITION BY stock_profile
+            ORDER BY
+                timestamp ROWS BETWEEN 1 FOLLOWING
+                AND 20 FOLLOWING
+        ) AS future_vol_20d
+    FROM
+        stock_return_base
+)
+SELECT
+    *
+FROM
+    base
+WHERE
+    future_vol_20d IS NOT NULL;
+
+DROP TABLE IF EXISTS stock_drawdown_target;
+
+CREATE TEMPORARY TABLE stock_drawdown_target AS WITH base AS (
+    SELECT
+        b.stock_profile,
+        b.timestamp,
+        MIN(f.close / b.close - 1) AS future_drawdown_20d
+    FROM
+        stock_return_base b
+        JOIN stock_data f ON f.stock_profile = b.stock_profile
+        AND f.timestamp > b.timestamp
+        AND f.timestamp <= DATE_ADD(b.timestamp, INTERVAL 20 DAY)
+    GROUP BY
+        b.stock_profile,
+        b.timestamp
+)
+SELECT
+    *
+FROM
+    base
+WHERE
+    future_drawdown_20d IS NOT NULL;
+
+DROP TABLE IF EXISTS stock_crash_target;
+
+CREATE TEMPORARY TABLE stock_crash_target AS WITH base AS (
+    SELECT
+        stock_profile,
+        timestamp,
+        CASE
+            WHEN future_return_5d < -0.08 THEN 1
+            ELSE 0
+        END AS crash
+    FROM
+        stock_return_base
+)
+SELECT
+    *
+FROM
+    base
+WHERE
+    crash IS NOT NULL;
+
 DROP TABLE IF EXISTS stock_return_features_cal;
 
 CREATE TEMPORARY TABLE stock_return_features_cal AS
@@ -147,9 +198,9 @@ SELECT
 FROM
     stock_return_features;
 
-DROP TABLE IF EXISTS stock_return_normalized;
+DROP TABLE IF EXISTS stock_data_normalized;
 
-CREATE TEMPORARY TABLE stock_return_normalized AS
+CREATE TEMPORARY TABLE stock_data_normalized AS
 SELECT
     stock_profile,
     timestamp,
@@ -216,15 +267,101 @@ SELECT
     woy_cos,
     month_sin,
     month_cos,
+    future_return_5d
+FROM
+    stock_return_features_cal;
+
+DROP TABLE IF EXISTS stock_return_normalized;
+
+CREATE TEMPORARY TABLE stock_return_normalized AS
+SELECT
+    *,
     ROW_NUMBER() OVER (
         PARTITION BY stock_profile
         ORDER BY
             timestamp DESC
     ) AS step_count,
-    COUNT(*) OVER (PARTITION BY stock_profile) as total_step,
-    future_return_5d
+    COUNT(*) OVER (PARTITION BY stock_profile) as total_step
 FROM
-    stock_return_features_cal;
+    stock_data_normalized;
+
+DROP TABLE IF EXISTS stock_vol_normalized;
+
+CREATE TEMPORARY TABLE stock_vol_normalized AS
+SELECT
+    n.stock_profile,
+    n.timestamp,
+    n.ret_1d_n,
+    n.ret_5d_n,
+    n.ret_20d_n,
+    n.vol_20_n,
+    n.drawdown_n,
+    n.turnover_n,
+    n.foreign_flow_n,
+    n.order_imbalance_n,
+    n.spread_n,
+    ROW_NUMBER() OVER (
+        PARTITION BY n.stock_profile
+        ORDER BY
+            n.timestamp DESC
+    ) AS step_count,
+    COUNT(*) OVER (PARTITION BY n.stock_profile) as total_step,
+    v.future_vol_20d
+FROM
+    stock_data_normalized n
+    JOIN stock_vol_target v ON n.stock_profile = v.stock_profile
+    AND n.timestamp = v.timestamp;
+
+DROP TABLE IF EXISTS stock_drawdown_normalized;
+
+CREATE TEMPORARY TABLE stock_drawdown_normalized AS
+SELECT
+    n.stock_profile,
+    n.timestamp,
+    n.ret_1d_n,
+    n.ret_5d_n,
+    n.vol_20_n,
+    n.drawdown_n,
+    n.turnover_n,
+    n.foreign_flow_n,
+    n.order_imbalance_n,
+    n.spread_n,
+    ROW_NUMBER() OVER (
+        PARTITION BY n.stock_profile
+        ORDER BY
+            n.timestamp DESC
+    ) AS step_count,
+    COUNT(*) OVER (PARTITION BY n.stock_profile) as total_step,
+    d.future_drawdown_20d
+FROM
+    stock_data_normalized n
+    JOIN stock_drawdown_target d ON n.stock_profile = d.stock_profile
+    AND n.timestamp = d.timestamp;
+
+DROP TABLE IF EXISTS stock_crash_normalized;
+
+CREATE TEMPORARY TABLE stock_crash_normalized AS
+SELECT
+    n.stock_profile,
+    n.timestamp,
+    -- USE RAW (NOT SEQUENCE) FEATURES
+    n.vol_20,
+    n.drawdown,
+    n.turnover,
+    n.foreign_flow,
+    n.order_imbalance,
+    n.spread_proxy,
+    ROW_NUMBER() OVER (
+        PARTITION BY n.stock_profile
+        ORDER BY
+            n.timestamp DESC
+    ) AS step_count,
+    COUNT(*) OVER (PARTITION BY n.stock_profile) as total_step,
+    c.crash
+FROM
+    stock_return_features n
+    JOIN stock_crash_target c ON n.stock_profile = c.stock_profile
+    AND n.timestamp = c.timestamp;
 
 DROP TABLE IF EXISTS stock_return_train;
 
@@ -257,7 +394,7 @@ SELECT
 FROM
     stock_return_normalized
 WHERE
-    step_count > ROUND(total_step * @TRAIN_RATIO, 0);
+    step_count > ROUND(total_step * @VAL_RATIO, 0);
 
 CREATE TABLE stock_return_val AS
 SELECT
@@ -286,4 +423,122 @@ SELECT
 FROM
     stock_return_normalized
 WHERE
-    step_count <= ROUND(total_step * @TRAIN_RATIO, 0);
+    step_count <= ROUND(total_step * @VAL_RATIO, 0);
+
+DROP TABLE IF EXISTS stock_vol_train;
+
+DROP TABLE IF EXISTS stock_vol_val;
+
+CREATE TABLE stock_vol_train AS
+SELECT
+    stock_profile,
+    timestamp,
+    ret_1d_n,
+    ret_5d_n,
+    ret_20d_n,
+    vol_20_n,
+    drawdown_n,
+    turnover_n,
+    foreign_flow_n,
+    order_imbalance_n,
+    spread_n,
+    future_vol_20d
+FROM
+    stock_vol_normalized
+WHERE
+    step_count > ROUND(total_step * @VAL_RATIO, 0);
+
+CREATE TABLE stock_vol_val AS
+SELECT
+    stock_profile,
+    timestamp,
+    ret_1d_n,
+    ret_5d_n,
+    ret_20d_n,
+    vol_20_n,
+    drawdown_n,
+    turnover_n,
+    foreign_flow_n,
+    order_imbalance_n,
+    spread_n,
+    future_vol_20d
+FROM
+    stock_vol_normalized
+WHERE
+    step_count <= ROUND(total_step * @VAL_RATIO, 0);
+
+DROP TABLE IF EXISTS stock_drawdown_train;
+
+DROP TABLE IF EXISTS stock_drawdown_val;
+
+CREATE TABLE stock_drawdown_train AS
+SELECT
+    stock_profile,
+    timestamp,
+    ret_1d_n,
+    ret_5d_n,
+    vol_20_n,
+    drawdown_n,
+    turnover_n,
+    foreign_flow_n,
+    order_imbalance_n,
+    spread_n,
+    future_drawdown_20d
+FROM
+    stock_drawdown_normalized
+WHERE
+    step_count > ROUND(total_step * @VAL_RATIO, 0);
+
+CREATE TABLE stock_drawdown_val AS
+SELECT
+    stock_profile,
+    timestamp,
+    ret_1d_n,
+    ret_5d_n,
+    vol_20_n,
+    drawdown_n,
+    turnover_n,
+    foreign_flow_n,
+    order_imbalance_n,
+    spread_n,
+    future_drawdown_20d
+FROM
+    stock_drawdown_normalized
+WHERE
+    step_count <= ROUND(total_step * @VAL_RATIO, 0);
+
+DROP TABLE IF EXISTS stock_crash_train;
+
+DROP TABLE IF EXISTS stock_crash_val;
+
+CREATE TABLE stock_crash_train AS
+SELECT
+    stock_profile,
+    timestamp,
+    vol_20,
+    drawdown,
+    turnover,
+    foreign_flow,
+    order_imbalance,
+    spread_proxy,
+    crash
+FROM
+    stock_crash_normalized
+WHERE
+    step_count > ROUND(total_step * @VAL_RATIO, 0);
+
+CREATE TABLE stock_crash_val AS
+SELECT
+    stock_profile,
+    timestamp,
+    vol_20,
+    drawdown,
+    turnover,
+    foreign_flow,
+    order_imbalance,
+    spread_proxy,
+    crash
+FROM
+    stock_crash_normalized
+WHERE
+    step_count <= ROUND(total_step * @VAL_RATIO, 0);

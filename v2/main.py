@@ -5,5 +5,5 @@ from stock.stock import stock_main
 
 engine = get_engine()
 
-risk_engine_output = risk_engine_main(engine)
+# risk_engine_output = risk_engine_main(engine)
 stock_output = stock_main(engine)

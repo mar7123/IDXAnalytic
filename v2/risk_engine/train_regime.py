@@ -14,7 +14,7 @@ def train_regime_model(train_df: pd.DataFrame, test_df: pd.DataFrame):
     X_test, y_test = make_sequences(test_df, ALL_FEATURES, REGIME_TARGET)
 
     model = Sequential([
-        LSTM(64, return_sequences=False, recurrent_dropout=0.2),
+        LSTM(64, return_sequences=False),
         LayerNormalization(),
         Dropout(0.4),
 

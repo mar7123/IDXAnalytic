@@ -1,5 +1,6 @@
 from keras.models import Sequential
-from keras.layers import Input, LSTM, Dense, Dropout, LayerNormalization
+from keras.layers import Input, LSTM, Dense, Dropout, LayerNormalization, Embedding, Flatten, Concatenate
+from keras.models import Model
 from keras.optimizers import Adam
 import numpy as np
 import pandas as pd
@@ -40,27 +41,33 @@ def quantile_loss(q):
 
 
 def build_drawdown_model(engine: Engine, q: float = 0.95):
-    X_train, y_train = make_drawdown_sequences(load_drawdown_training(engine))
-    X_val, y_val = make_drawdown_sequences(load_drawdown_test(engine))
+    X_train, X_train_id, X_train_id_count, y_train = make_drawdown_sequences(
+        load_drawdown_training(engine))
+    X_val, X_val_id, X_val_id_count, y_val = make_drawdown_sequences(
+        load_drawdown_test(engine))
 
-    model = Sequential([
-        Input(shape=(WINDOW, X_train.shape[-1])),
-        LSTM(
-            64,
-            return_sequences=True,
-        ),
-        LayerNormalization(),
-        Dropout(0.1),
+    ts_input = Input(shape=(WINDOW, X_train.shape[-1]), name="ts_input")
+    x = LSTM(
+        64,
+        return_sequences=True,
+    )(ts_input)
+    x = LayerNormalization()(x)
+    x = Dropout(0.1)(x)
 
-        LSTM(32),
-        LayerNormalization(),
-        Dropout(0.1),
+    x = LSTM(32)(x)
+    x = LayerNormalization()(x)
+    x = Dropout(0.1)(x)
 
-        Dense(16, activation="relu"),
-        Dropout(0.1),
+    stock_id_input = Input(shape=(1,), name="stock_id_input")
+    emb = Embedding(input_dim=X_train_id_count, output_dim=16)(stock_id_input)
+    emb = Flatten()(emb)
 
-        Dense(1, activation="linear")
-    ])
+    merged = Concatenate()([x, emb])
+
+    z = Dense(16, activation="relu")(merged)
+    output = Dense(1, activation="linear")(z)
+
+    model = Model(inputs=[ts_input, stock_id_input], outputs=output)
 
     model.compile(
         optimizer=Adam(learning_rate=1e-3),
@@ -68,8 +75,15 @@ def build_drawdown_model(engine: Engine, q: float = 0.95):
     )
 
     model.fit(
-        X_train, y_train,
-        validation_data=(X_val, y_val),
+        x={
+            "ts_input": X_train,
+            "stock_id_input": X_train_id
+        },
+        y=y_train,
+        validation_data=({
+            "ts_input": X_val,
+            "stock_id_input": X_val_id
+        }, y_val),
         epochs=150,
         batch_size=256,
         shuffle=True,
@@ -83,7 +97,10 @@ def build_drawdown_model(engine: Engine, q: float = 0.95):
         ],
     )
 
-    pred = model.predict(X_val)
+    pred = model.predict({
+        "ts_input": X_val,
+        "stock_id_input": X_val_id
+    })
     coverage_check = y_val <= pred.flatten()
 
     coverage_ratio = np.mean(coverage_check)

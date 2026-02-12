@@ -32,9 +32,9 @@ def clean_data(db_engine: Engine):
 def stock_main(engine: Engine):
     prep_data(engine)
 
-    # return_model = build_return_model(engine)
+    return_model = build_return_model(engine)
     # vol_model = build_vol_model(engine)
-    drawdown_model = build_drawdown_model(engine=engine)
+    # drawdown_model = build_drawdown_model(engine=engine)
     
 
     clean_data(engine)

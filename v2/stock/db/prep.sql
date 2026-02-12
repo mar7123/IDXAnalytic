@@ -42,10 +42,7 @@ CREATE TEMPORARY TABLE stock_return_base AS WITH base AS (
             AND s.previous != 0 THEN s.previous
             ELSE s.open_price
         END AS open_price,
-        s.high,
-        s.low,
         s.volume,
-        s.value,
         s.tradeble_shares,
         s.foreign_buy,
         s.foreign_sell,
@@ -77,7 +74,8 @@ CREATE TEMPORARY TABLE stock_return_base AS WITH base AS (
         ) AS step_count,
         COUNT(*) OVER (PARTITION BY s.stock_profile) as total_step,
         -- future return target
-        (LEAD(s.close, @HORIZON) OVER w / s.close) - 1 AS future_return_5d
+        (LEAD(s.close, @HORIZON) OVER w / s.close) - 1 AS future_return_5d,
+        (LEAD(s.volume, @HORIZON) OVER w) AS future_vol_5d
     FROM
         stock_data s WINDOW w AS (
             PARTITION BY s.stock_profile
@@ -204,6 +202,7 @@ CREATE TEMPORARY TABLE stock_data_normalized AS
 SELECT
     stock_profile,
     timestamp,
+    volume,
     -- normalized inputs
     PERCENT_RANK() OVER (
         PARTITION BY timestamp
@@ -267,7 +266,8 @@ SELECT
     woy_cos,
     month_sin,
     month_cos,
-    future_return_5d
+    future_return_5d,
+    future_vol_5d
 FROM
     stock_return_features_cal;
 
@@ -371,6 +371,7 @@ CREATE TABLE stock_return_train AS
 SELECT
     stock_profile,
     timestamp,
+    volume,
     -- normalized inputs
     ret_1d_n,
     ret_5d_n,
@@ -390,7 +391,8 @@ SELECT
     woy_cos,
     month_sin,
     month_cos,
-    future_return_5d
+    future_return_5d,
+    future_vol_5d
 FROM
     stock_return_normalized
 WHERE
@@ -400,6 +402,7 @@ CREATE TABLE stock_return_val AS
 SELECT
     stock_profile,
     timestamp,
+    volume,
     -- normalized inputs
     ret_1d_n,
     ret_5d_n,
@@ -419,7 +422,8 @@ SELECT
     woy_cos,
     month_sin,
     month_cos,
-    future_return_5d
+    future_return_5d,
+    future_vol_5d
 FROM
     stock_return_normalized
 WHERE

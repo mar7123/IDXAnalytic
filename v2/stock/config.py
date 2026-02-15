@@ -1,3 +1,12 @@
+INDEX_FEATURE_COLS = [
+    "idx_ret_1d_n",
+    "idx_ret_5d_n",
+    "idx_close_pos_n",
+    "idx_range_n",
+    "idx_vol_20_n",
+    "idx_value_z_n",
+]
+
 RETURN_FEATURE_COLS = [
     "ret_1d_n", "ret_5d_n", "ret_20d_n",
     "gap_n", "intraday_range_n", "close_position",
@@ -29,6 +38,15 @@ DD_FEATURES = [
     "foreign_flow_n",
     "order_imbalance_n",
     "spread_n",
+]
+
+CRASH_FEATURES = [
+    "vol_20",
+    "drawdown",
+    "turnover",
+    "foreign_flow",
+    "order_imbalance",
+    "spread_proxy",
 ]
 
 

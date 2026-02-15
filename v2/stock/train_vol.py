@@ -2,6 +2,7 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense, Dropout, LayerNormalization
 from keras.optimizers import Adam
 from keras.losses import Huber
+from keras.metrics import MeanAbsoluteError
 import pandas as pd
 from sqlalchemy import Engine
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
@@ -55,7 +56,8 @@ def build_vol_model(engine: Engine):
 
     model.compile(
         optimizer=Adam(learning_rate=1e-3),
-        loss=Huber(delta=1.0)
+        loss=Huber(delta=1),
+        metrics=[MeanAbsoluteError()]
     )
     model.fit(
         X_train, y_train,
@@ -71,5 +73,6 @@ def build_vol_model(engine: Engine):
             ),
             ReduceLROnPlateau(patience=5, verbose=1,),
         ],
+        verbose=2,
     )
     return model

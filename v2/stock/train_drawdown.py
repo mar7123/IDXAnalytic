@@ -1,5 +1,5 @@
 from keras.models import Sequential
-from keras.layers import Input, LSTM, Dense, Dropout, LayerNormalization, Embedding, Flatten, Concatenate
+from keras.layers import Input, LSTM, Dense, Dropout, LayerNormalization, Embedding, Flatten, Concatenate, RepeatVector
 from keras.models import Model
 from keras.optimizers import Adam
 import numpy as np
@@ -41,16 +41,34 @@ def quantile_loss(q):
 
 
 def build_drawdown_model(engine: Engine, q: float = 0.95):
-    X_train, X_train_id, X_train_id_count, y_train = make_drawdown_sequences(
-        load_drawdown_training(engine))
-    X_val, X_val_id, X_val_id_count, y_val = make_drawdown_sequences(
-        load_drawdown_test(engine))
+    train_df = load_drawdown_training(engine)
+    val_df = load_drawdown_test(engine)
+    stock_profile_set: set[str] = set()
+    for stock_profile in train_df["stock_profile"].values:
+        stock_profile_set.add(stock_profile)
+    for stock_profile in val_df["stock_profile"].values:
+        stock_profile_set.add(stock_profile)
+    stock_profile_mapper = {label: i for i,
+                            label in enumerate(sorted(stock_profile_set))}
+
+    X_train, X_train_id, y_train = make_drawdown_sequences(
+        train_df, stock_profile_mapper)
+    X_val, X_val_id, y_val = make_drawdown_sequences(
+        val_df, stock_profile_mapper)
 
     ts_input = Input(shape=(WINDOW, X_train.shape[-1]), name="ts_input")
+
+    stock_id_input = Input(shape=(1,), name="stock_id_input")
+    emb = Embedding(input_dim=len(stock_profile_mapper), output_dim=16)(stock_id_input)
+    emb = Flatten()(emb)
+    emb_seq = RepeatVector(WINDOW)(emb)
+
+    merged_input = Concatenate(axis=-1)([ts_input, emb_seq])
+
     x = LSTM(
         64,
         return_sequences=True,
-    )(ts_input)
+    )(merged_input)
     x = LayerNormalization()(x)
     x = Dropout(0.1)(x)
 
@@ -58,19 +76,13 @@ def build_drawdown_model(engine: Engine, q: float = 0.95):
     x = LayerNormalization()(x)
     x = Dropout(0.1)(x)
 
-    stock_id_input = Input(shape=(1,), name="stock_id_input")
-    emb = Embedding(input_dim=X_train_id_count, output_dim=16)(stock_id_input)
-    emb = Flatten()(emb)
-
-    merged = Concatenate()([x, emb])
-
-    z = Dense(16, activation="relu")(merged)
+    z = Dense(16, activation="relu")(x)
     output = Dense(1, activation="linear")(z)
 
     model = Model(inputs=[ts_input, stock_id_input], outputs=output)
 
     model.compile(
-        optimizer=Adam(learning_rate=1e-3),
+        optimizer=Adam(learning_rate=1e-4),
         loss=quantile_loss(q)
     )
 

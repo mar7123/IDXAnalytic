@@ -2,7 +2,7 @@ from keras.models import Model
 from keras.layers import Input, Dense, Dropout, LayerNormalization, Embedding, Flatten, Concatenate, RepeatVector
 from keras.optimizers import Adam
 from keras.losses import Huber
-from keras.metrics import MeanAbsoluteError, R2Score
+from keras.metrics import MeanAbsoluteError
 import pandas as pd
 from sqlalchemy import Engine
 from tcn import TCN
@@ -32,20 +32,27 @@ def load_return_test(db_engine: Engine) -> pd.DataFrame:
         df = pd.read_sql(pd_query, connection)
     return df
 
-# TODO add market return diff
-
-
 def build_return_model(engine: Engine):
-    X_train, X_train_id, X_train_id_count, y_train = make_return_sequences(
-        load_return_training(engine))
-    X_val, X_val_id, X_val_id_count, y_val = make_return_sequences(
-        load_return_test(engine))
+    train_df = load_return_training(engine)
+    val_df = load_return_test(engine)
+    stock_profile_set: set[str] = set()
+    for stock_profile in train_df["stock_profile"].values:
+        stock_profile_set.add(stock_profile)
+    for stock_profile in val_df["stock_profile"].values:
+        stock_profile_set.add(stock_profile)
+    stock_profile_mapper = {label: i for i,
+                            label in enumerate(sorted(stock_profile_set))}
+
+    X_train, X_train_id, y_train = make_return_sequences(
+        train_df, stock_profile_mapper)
+    X_val, X_val_id, y_val = make_return_sequences(
+        val_df, stock_profile_mapper)
 
     ts_input = Input(shape=(WINDOW, X_train.shape[-1]), name="ts_input")
 
     stock_id_input = Input(shape=(1,), name="stock_id_input")
-    emb = Embedding(input_dim=X_train_id_count,
-                    output_dim=18)(stock_id_input)
+    emb = Embedding(input_dim=len(stock_profile_mapper),
+                    output_dim=20)(stock_id_input)
     emb = Flatten()(emb)
     emb_seq = RepeatVector(WINDOW)(emb)
 
@@ -53,7 +60,7 @@ def build_return_model(engine: Engine):
 
     x = TCN(
         nb_filters=64,
-        kernel_size=5,
+        kernel_size=8,
         dilations=[1, 2, 4, 8, 16, 32],
         padding="causal",
         dropout_rate=0.1,
@@ -73,8 +80,8 @@ def build_return_model(engine: Engine):
 
     model.compile(
         optimizer=Adam(learning_rate=1e-4),
-        loss=Huber(delta=1),
-        metrics=[MeanAbsoluteError(), R2Score()]
+        loss=Huber(delta=0.1),
+        metrics=[MeanAbsoluteError()]
     )
     model.fit(
         x={

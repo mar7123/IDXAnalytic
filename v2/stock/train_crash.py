@@ -61,9 +61,9 @@ def build_crash_model(engine: Engine):
         verbose=True
     )
     calibrated_model = CalibratedClassifierCV(
-        base_estimator=model,
+        estimator=model,
         method="isotonic",
-        cv="prefit"
+        ensemble=False
     )
 
     calibrated_model.fit(X_val, y_val)

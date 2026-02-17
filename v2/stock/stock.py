@@ -34,8 +34,8 @@ def stock_main(engine: Engine):
     prep_data(engine)
 
     return_model = build_return_model(engine)
-    vol_model = build_vol_model(engine)
-    drawdown_model = build_drawdown_model(engine=engine)
-    crash_model = build_crash_model(engine=engine)
+    # vol_model = build_vol_model(engine)
+    # drawdown_model = build_drawdown_model(engine=engine)
+    # crash_model = build_crash_model(engine=engine)
 
     clean_data(engine)

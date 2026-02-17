@@ -29,9 +29,9 @@ WHERE
             )
     );
 
-DROP TABLE IF EXISTS index_base;
+DROP TABLE IF EXISTS market_base;
 
-CREATE TEMPORARY TABLE index_base AS WITH base AS (
+CREATE TEMPORARY TABLE market_base AS WITH index_base AS (
     SELECT
         timestamp,
         (close / previous) - 1 AS idx_ret_1d,
@@ -56,18 +56,56 @@ CREATE TEMPORARY TABLE index_base AS WITH base AS (
     WHERE
         index_profile = "COMPOSITE"
 ),
-window_base AS (
+index_window_base AS (
     SELECT
         *,
         STDDEV(idx_ret_1d) OVER w idx_vol_20,
         AVG(idx_value) OVER w avg_val_20,
         STDDEV(idx_value) OVER w AS std_val_20
     FROM
-        base WINDOW w AS (
+        index_base WINDOW w AS (
             ORDER BY
                 timestamp ROWS BETWEEN 19 PRECEDING
                 AND CURRENT ROW
         )
+),
+currency_exchange_base AS (
+    SELECT
+        timestamp,
+        (secondary_value / primary_value) AS currency_exchange_rate
+    FROM
+        currency_exchange_rates
+    WHERE
+        primary_code = "USD"
+        AND secondary_code = "IDR"
+),
+merged_timestamp_base AS(
+    SELECT
+        iwb.*,
+        -- Currency exchange features
+        ceb.currency_exchange_rate,
+        LAG(ceb.currency_exchange_rate, 1) OVER (
+            ORDER BY
+                iwb.timestamp
+        ) AS prev_currency_exchange_rate,
+        AVG(ceb.currency_exchange_rate) OVER (
+            ORDER BY
+                iwb.timestamp ROWS BETWEEN 6 PRECEDING
+                AND CURRENT ROW
+        ) AS currency_exchange_rate_ma_7,
+        AVG(ceb.currency_exchange_rate) OVER (
+            ORDER BY
+                iwb.timestamp ROWS BETWEEN 29 PRECEDING
+                AND CURRENT ROW
+        ) AS currency_exchange_rate_ma_30,
+        STDDEV(ceb.currency_exchange_rate) OVER (
+            ORDER BY
+                iwb.timestamp ROWS BETWEEN 6 PRECEDING
+                AND CURRENT ROW
+        ) AS currency_exchange_rate_volatility_7
+    FROM
+        index_window_base iwb
+        INNER JOIN currency_exchange_base ceb ON iwb.timestamp = ceb.timestamp
 )
 SELECT
     timestamp,
@@ -76,12 +114,27 @@ SELECT
     idx_close_pos,
     idx_range,
     idx_vol_20,
-    (idx_value - avg_val_20) / NULLIF(std_val_20, 0) AS idx_value_z_n
+    (idx_value - avg_val_20) / NULLIF(std_val_20, 0) AS idx_value_z_n,
+    -- Currency exchange features
+    (
+        (
+            currency_exchange_rate - prev_currency_exchange_rate
+        ) / prev_currency_exchange_rate
+    ) AS currency_exchange_rate_daily_return,
+    LN(
+        currency_exchange_rate / prev_currency_exchange_rate
+    ) AS currency_exchange_rate_log_return,
+    currency_exchange_rate_ma_7,
+    currency_exchange_rate_ma_30,
+    currency_exchange_rate_volatility_7,
+    (
+        currency_exchange_rate - currency_exchange_rate_ma_30
+    ) / currency_exchange_rate_ma_30 AS currency_exchange_rate_dist_from_ma30
 FROM
-    window_base
+    merged_timestamp_base
 WHERE
     idx_vol_20 IS NOT NULL
-    AND step_count > 20;
+    AND step_count > 30;
 
 DROP TABLE IF EXISTS stock_base;
 
@@ -161,15 +214,23 @@ window_base AS (
 )
 SELECT
     wb.*,
-    ib.idx_ret_1d,
-    ib.idx_ret_5d,
-    ib.idx_close_pos,
-    ib.idx_range,
-    ib.idx_vol_20,
-    ib.idx_value_z_n
+    -- Index Features
+    mb.idx_ret_1d,
+    mb.idx_ret_5d,
+    mb.idx_close_pos,
+    mb.idx_range,
+    mb.idx_vol_20,
+    mb.idx_value_z_n,
+    -- Currency Exchange Rate features
+    mb.currency_exchange_rate_daily_return,
+    mb.currency_exchange_rate_log_return,
+    mb.currency_exchange_rate_ma_7,
+    mb.currency_exchange_rate_ma_30,
+    mb.currency_exchange_rate_volatility_7,
+    mb.currency_exchange_rate_dist_from_ma30
 FROM
     window_base wb
-    INNER JOIN index_base ib ON wb.timestamp = ib.timestamp
+    INNER JOIN market_base mb ON wb.timestamp = mb.timestamp
 WHERE
     wb.total_step >= @MIN_STEP
     AND wb.step_count < (wb.total_step -120);
@@ -351,7 +412,14 @@ SELECT
     idx_close_pos,
     idx_range,
     idx_vol_20,
-    idx_value_z_n
+    idx_value_z_n,
+    -- Currency Exchange Rate features
+    currency_exchange_rate_daily_return,
+    currency_exchange_rate_log_return,
+    currency_exchange_rate_ma_7,
+    currency_exchange_rate_ma_30,
+    currency_exchange_rate_volatility_7,
+    currency_exchange_rate_dist_from_ma30
 FROM
     stock_base;
 
@@ -360,7 +428,11 @@ DROP TABLE IF EXISTS stock_return_normalized;
 CREATE TEMPORARY TABLE stock_return_normalized AS
 SELECT
     sdn.*,
-    srt.future_return_5d,
+    PERCENT_RANK() OVER (
+        PARTITION BY timestamp
+        ORDER BY
+            srt.future_return_5d
+    ) AS future_return_5d,
     srt.future_volume_5d,
     ROW_NUMBER() OVER (
         PARTITION BY sdn.stock_profile
@@ -459,11 +531,21 @@ DROP TABLE IF EXISTS stock_return_index_scaler;
 CREATE TEMPORARY TABLE stock_return_index_scaler WITH ranked_data AS (
     SELECT
         stock_profile,
+        -- Index features
         idx_ret_1d,
         idx_ret_5d,
         idx_close_pos,
         idx_range,
         idx_vol_20,
+        idx_value_z_n,
+        -- Currency Exchange Rate features
+        currency_exchange_rate_daily_return,
+        currency_exchange_rate_log_return,
+        currency_exchange_rate_ma_7,
+        currency_exchange_rate_ma_30,
+        currency_exchange_rate_volatility_7,
+        currency_exchange_rate_dist_from_ma30,
+        -- Index features
         PERCENT_RANK() OVER (
             PARTITION BY stock_profile
             ORDER BY
@@ -488,7 +570,43 @@ CREATE TEMPORARY TABLE stock_return_index_scaler WITH ranked_data AS (
             PARTITION BY stock_profile
             ORDER BY
                 idx_vol_20
-        ) AS p_rank_idx_vol_20
+        ) AS p_rank_idx_vol_20,
+        PERCENT_RANK() OVER (
+            PARTITION BY stock_profile
+            ORDER BY
+                idx_value_z_n
+        ) AS p_rank_idx_value_z_n,
+        -- Currency Exchange Rate features
+        PERCENT_RANK() OVER (
+            PARTITION BY stock_profile
+            ORDER BY
+                currency_exchange_rate_daily_return
+        ) AS p_rank_currency_exchange_rate_daily_return,
+        PERCENT_RANK() OVER (
+            PARTITION BY stock_profile
+            ORDER BY
+                currency_exchange_rate_log_return
+        ) AS p_rank_currency_exchange_rate_log_return,
+        PERCENT_RANK() OVER (
+            PARTITION BY stock_profile
+            ORDER BY
+                currency_exchange_rate_ma_7
+        ) AS p_rank_currency_exchange_rate_ma_7,
+        PERCENT_RANK() OVER (
+            PARTITION BY stock_profile
+            ORDER BY
+                currency_exchange_rate_ma_30
+        ) AS p_rank_currency_exchange_rate_ma_30,
+        PERCENT_RANK() OVER (
+            PARTITION BY stock_profile
+            ORDER BY
+                currency_exchange_rate_volatility_7
+        ) AS p_rank_currency_exchange_rate_volatility_7,
+        PERCENT_RANK() OVER (
+            PARTITION BY stock_profile
+            ORDER BY
+                currency_exchange_rate_dist_from_ma30
+        ) AS p_rank_currency_exchange_rate_dist_from_ma30
     FROM
         stock_return_normalized
     WHERE
@@ -496,6 +614,7 @@ CREATE TEMPORARY TABLE stock_return_index_scaler WITH ranked_data AS (
 )
 SELECT
     stock_profile,
+    -- Index features
     MAX(
         CASE
             WHEN p_rank_idx_ret_1d <= 0.25 THEN idx_ret_1d
@@ -570,7 +689,113 @@ SELECT
         CASE
             WHEN p_rank_idx_vol_20 <= 0.75 THEN idx_vol_20
         END
-    ) AS q3_idx_vol_20
+    ) AS q3_idx_vol_20,
+    MAX(
+        CASE
+            WHEN p_rank_idx_value_z_n <= 0.25 THEN idx_value_z_n
+        END
+    ) AS q1_idx_value_z_n,
+    MAX(
+        CASE
+            WHEN p_rank_idx_value_z_n <= 0.50 THEN idx_value_z_n
+        END
+    ) AS median_idx_value_z_n,
+    MAX(
+        CASE
+            WHEN p_rank_idx_value_z_n <= 0.75 THEN idx_value_z_n
+        END
+    ) AS q3_idx_value_z_n,
+    -- Currency Exchange Rate features
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_daily_return <= 0.25 THEN currency_exchange_rate_daily_return
+        END
+    ) AS q1_currency_exchange_rate_daily_return,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_daily_return <= 0.50 THEN currency_exchange_rate_daily_return
+        END
+    ) AS median_currency_exchange_rate_daily_return,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_daily_return <= 0.75 THEN currency_exchange_rate_daily_return
+        END
+    ) AS q3_currency_exchange_rate_daily_return,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_log_return <= 0.25 THEN currency_exchange_rate_log_return
+        END
+    ) AS q1_currency_exchange_rate_log_return,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_log_return <= 0.50 THEN currency_exchange_rate_log_return
+        END
+    ) AS median_currency_exchange_rate_log_return,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_log_return <= 0.75 THEN currency_exchange_rate_log_return
+        END
+    ) AS q3_currency_exchange_rate_log_return,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_ma_7 <= 0.25 THEN currency_exchange_rate_ma_7
+        END
+    ) AS q1_currency_exchange_rate_ma_7,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_ma_7 <= 0.50 THEN currency_exchange_rate_ma_7
+        END
+    ) AS median_currency_exchange_rate_ma_7,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_ma_7 <= 0.75 THEN currency_exchange_rate_ma_7
+        END
+    ) AS q3_currency_exchange_rate_ma_7,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_ma_30 <= 0.25 THEN currency_exchange_rate_ma_30
+        END
+    ) AS q1_currency_exchange_rate_ma_30,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_ma_30 <= 0.50 THEN currency_exchange_rate_ma_30
+        END
+    ) AS median_currency_exchange_rate_ma_30,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_ma_30 <= 0.75 THEN currency_exchange_rate_ma_30
+        END
+    ) AS q3_currency_exchange_rate_ma_30,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_volatility_7 <= 0.25 THEN currency_exchange_rate_volatility_7
+        END
+    ) AS q1_currency_exchange_rate_volatility_7,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_volatility_7 <= 0.50 THEN currency_exchange_rate_volatility_7
+        END
+    ) AS median_currency_exchange_rate_volatility_7,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_volatility_7 <= 0.75 THEN currency_exchange_rate_volatility_7
+        END
+    ) AS q3_currency_exchange_rate_volatility_7,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_dist_from_ma30 <= 0.25 THEN currency_exchange_rate_dist_from_ma30
+        END
+    ) AS q1_currency_exchange_rate_dist_from_ma30,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_dist_from_ma30 <= 0.50 THEN currency_exchange_rate_dist_from_ma30
+        END
+    ) AS median_currency_exchange_rate_dist_from_ma30,
+    MAX(
+        CASE
+            WHEN p_rank_currency_exchange_rate_dist_from_ma30 <= 0.75 THEN currency_exchange_rate_dist_from_ma30
+        END
+    ) AS q3_currency_exchange_rate_dist_from_ma30
 FROM
     ranked_data
 GROUP BY
@@ -610,7 +835,44 @@ SELECT
     (srn.idx_close_pos - sris.median_idx_close_pos) / NULLIF(sris.q3_idx_close_pos - sris.q1_idx_close_pos, 0) AS idx_close_pos_n,
     (srn.idx_range - sris.median_idx_range) / NULLIF(sris.q3_idx_range - sris.q1_idx_range, 0) AS idx_range_n,
     (srn.idx_vol_20 - sris.median_idx_vol_20) / NULLIF(sris.q3_idx_vol_20 - sris.q1_idx_vol_20, 0) AS idx_vol_20_n,
-    idx_value_z_n,
+    (srn.idx_value_z_n - sris.median_idx_value_z_n) / NULLIF(sris.q3_idx_value_z_n - sris.q1_idx_value_z_n, 0) AS idx_value_z_n_n,
+    -- Currency Exchange Rate features
+    (
+        srn.currency_exchange_rate_daily_return - sris.median_currency_exchange_rate_daily_return
+    ) / NULLIF(
+        sris.q3_currency_exchange_rate_daily_return - q1_currency_exchange_rate_daily_return,
+        0
+    ) AS currency_exchange_rate_daily_return_n,
+    (
+        srn.currency_exchange_rate_log_return - sris.median_currency_exchange_rate_log_return
+    ) / NULLIF(
+        sris.q3_currency_exchange_rate_log_return - q1_currency_exchange_rate_log_return,
+        0
+    ) AS currency_exchange_rate_log_return_n,
+    (
+        srn.currency_exchange_rate_ma_7 - sris.median_currency_exchange_rate_ma_7
+    ) / NULLIF(
+        sris.q3_currency_exchange_rate_ma_7 - q1_currency_exchange_rate_ma_7,
+        0
+    ) AS currency_exchange_rate_ma_7_n,
+    (
+        srn.currency_exchange_rate_ma_30 - sris.median_currency_exchange_rate_ma_30
+    ) / NULLIF(
+        sris.q3_currency_exchange_rate_ma_30 - q1_currency_exchange_rate_ma_30,
+        0
+    ) AS currency_exchange_rate_ma_30_n,
+    (
+        srn.currency_exchange_rate_volatility_7 - sris.median_currency_exchange_rate_volatility_7
+    ) / NULLIF(
+        sris.q3_currency_exchange_rate_volatility_7 - q1_currency_exchange_rate_volatility_7,
+        0
+    ) AS currency_exchange_rate_volatility_7_n,
+    (
+        srn.currency_exchange_rate_dist_from_ma30 - sris.median_currency_exchange_rate_dist_from_ma30
+    ) / NULLIF(
+        sris.q3_currency_exchange_rate_dist_from_ma30 - q1_currency_exchange_rate_dist_from_ma30,
+        0
+    ) AS currency_exchange_rate_dist_from_ma30_n,
     -- target
     srn.future_return_5d,
     srn.future_volume_5d
@@ -650,7 +912,44 @@ SELECT
     (srn.idx_close_pos - sris.median_idx_close_pos) / NULLIF(sris.q3_idx_close_pos - sris.q1_idx_close_pos, 0) AS idx_close_pos_n,
     (srn.idx_range - sris.median_idx_range) / NULLIF(sris.q3_idx_range - sris.q1_idx_range, 0) AS idx_range_n,
     (srn.idx_vol_20 - sris.median_idx_vol_20) / NULLIF(sris.q3_idx_vol_20 - sris.q1_idx_vol_20, 0) AS idx_vol_20_n,
-    idx_value_z_n,
+    (srn.idx_value_z_n - sris.median_idx_value_z_n) / NULLIF(sris.q3_idx_value_z_n - sris.q1_idx_value_z_n, 0) AS idx_value_z_n_n,
+    -- Currency Exchange Rate features
+    (
+        srn.currency_exchange_rate_daily_return - sris.median_currency_exchange_rate_daily_return
+    ) / NULLIF(
+        sris.q3_currency_exchange_rate_daily_return - q1_currency_exchange_rate_daily_return,
+        0
+    ) AS currency_exchange_rate_daily_return_n,
+    (
+        srn.currency_exchange_rate_log_return - sris.median_currency_exchange_rate_log_return
+    ) / NULLIF(
+        sris.q3_currency_exchange_rate_log_return - q1_currency_exchange_rate_log_return,
+        0
+    ) AS currency_exchange_rate_log_return_n,
+    (
+        srn.currency_exchange_rate_ma_7 - sris.median_currency_exchange_rate_ma_7
+    ) / NULLIF(
+        sris.q3_currency_exchange_rate_ma_7 - q1_currency_exchange_rate_ma_7,
+        0
+    ) AS currency_exchange_rate_ma_7_n,
+    (
+        srn.currency_exchange_rate_ma_30 - sris.median_currency_exchange_rate_ma_30
+    ) / NULLIF(
+        sris.q3_currency_exchange_rate_ma_30 - q1_currency_exchange_rate_ma_30,
+        0
+    ) AS currency_exchange_rate_ma_30_n,
+    (
+        srn.currency_exchange_rate_volatility_7 - sris.median_currency_exchange_rate_volatility_7
+    ) / NULLIF(
+        sris.q3_currency_exchange_rate_volatility_7 - q1_currency_exchange_rate_volatility_7,
+        0
+    ) AS currency_exchange_rate_volatility_7_n,
+    (
+        srn.currency_exchange_rate_dist_from_ma30 - sris.median_currency_exchange_rate_dist_from_ma30
+    ) / NULLIF(
+        sris.q3_currency_exchange_rate_dist_from_ma30 - q1_currency_exchange_rate_dist_from_ma30,
+        0
+    ) AS currency_exchange_rate_dist_from_ma30_n,
     -- target
     srn.future_return_5d,
     srn.future_volume_5d

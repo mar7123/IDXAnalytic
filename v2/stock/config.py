@@ -4,7 +4,16 @@ INDEX_FEATURE_COLS = [
     "idx_close_pos_n",
     "idx_range_n",
     "idx_vol_20_n",
-    "idx_value_z_n",
+    "idx_value_z_n_n",
+]
+
+CURRENCY_EXCHANGE_RATE_FEATURE_COLS = [
+    "currency_exchange_rate_daily_return_n",
+    "currency_exchange_rate_log_return_n",
+    "currency_exchange_rate_ma_7_n",
+    "currency_exchange_rate_ma_30_n",
+    "currency_exchange_rate_volatility_7_n",
+    "currency_exchange_rate_dist_from_ma30_n",
 ]
 
 RETURN_FEATURE_COLS = [

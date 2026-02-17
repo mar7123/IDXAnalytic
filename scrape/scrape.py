@@ -42,7 +42,6 @@ start = end - timedelta(days=DAY_WINDOW)
 
 all_dates = {start + timedelta(days=i) for i in range((end - start).days + 1)}
 dates = list()
-first = datetime(year=2020, month=8, day=24)
 with create_db_connection(engine) as connection:
     connection.begin()
     queried_timestamps_query = "SELECT * from time_dimensions"
@@ -57,6 +56,7 @@ with create_db_connection(engine) as connection:
     dates = sorted(all_dates - queried_dates)
     connection.commit()
     connection.close()
+
 
 for timestamp in dates:
     date_query = timestamp.strftime("%Y%m%d")
@@ -213,5 +213,60 @@ for timestamp in dates:
             fw.write("data empty\n")
     num = random.randint(200, 500)
     time.sleep(num / 100)
+
+if len(dates) != 0:
+    primary_currency = "USD"
+    secondary_currency = "IDR"
+    oldest_date = dates[0].strftime("%Y-%m-%d")
+    latest_date = dates[-1].strftime("%Y-%m-%d")
+    currency_exchange_rates_url = f"https://api.frankfurter.dev/v1/{oldest_date}..{latest_date}"
+    params = {
+        "base": primary_currency,
+        "symbols": secondary_currency,
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Encoding": "gzip, deflate, br",
+    }
+    with open(LOG_NAME, "a") as fw:
+        fw.write(f"{oldest_date}-{latest_date}\n")
+    currency_exchange_rate_response = curl_cffi.get(
+        currency_exchange_rates_url, params=params,  headers=headers, impersonate="chrome"
+    )
+    if currency_exchange_rate_response.status_code == 200:
+        currency_exchange_rate_response_json = json.loads(
+            currency_exchange_rate_response.content)
+        rates = currency_exchange_rate_response_json["rates"]
+        rate_data = []
+        for date, rate_info in rates.items():
+            currency_value = rate_info[secondary_currency]
+            rate_data.append(
+                {
+                    "primary_code": primary_currency,
+                    "secondary_code": secondary_currency,
+                    "primary_value": 1,
+                    "secondary_value": currency_value,
+                    "timestamp": date,
+                }
+            )
+        with create_db_connection(engine) as connection:
+            currency_insert_query = f"INSERT IGNORE INTO currencies VALUES (:code)"
+            currency_res = connection.execute(
+                text(currency_insert_query), [{"code": primary_currency}, {"code": secondary_currency}])
+            with open(LOG_NAME, "a") as fw:
+                fw.write(
+                    f"{currency_insert_query} Affected rows {currency_res.rowcount}\n"
+                )
+            currency_exchange_insert_query = f"INSERT IGNORE INTO currency_exchange_rates VALUES (:primary_code, :secondary_code, :primary_value, :secondary_value, :timestamp)"
+            currency_exchange_res = connection.execute(
+                text(currency_exchange_insert_query), rate_data)
+            with open(LOG_NAME, "a") as fw:
+                fw.write(
+                    f"{currency_exchange_insert_query} Affected rows {currency_exchange_res.rowcount}\n"
+                )
+            connection.commit()
+            connection.close()
 
 # os.system("shutdown /s /t 0")

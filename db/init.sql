@@ -72,3 +72,20 @@ CREATE TABLE stock_data (
     FOREIGN KEY (timestamp) REFERENCES time_dimensions (timestamp) ON UPDATE CASCADE ON DELETE CASCADE,
     PRIMARY KEY (stock_profile, timestamp)
 );
+
+CREATE TABLE currencies(
+    `currency_code` VARCHAR(5) NOT NULL UNIQUE,
+    PRIMARY KEY (currency_code)
+);
+
+CREATE TABLE currency_exchange_rates (
+    `primary_code` VARCHAR(5) NOT NULL UNIQUE,
+    `secondary_code` VARCHAR(5) NOT NULL UNIQUE,
+    `primary_value` DOUBLE NOT NULL,
+    `secondary_value` DOUBLE NOT NULL,
+    `timestamp` TIMESTAMP NOT NULL,
+    FOREIGN KEY (primary_code) REFERENCES currencies (currency_code) ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY (secondary_code) REFERENCES currencies (currency_code) ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY (timestamp) REFERENCES time_dimensions (timestamp) ON UPDATE CASCADE ON DELETE CASCADE,
+    PRIMARY KEY (primary_code, secondary_code, timestamp)
+);

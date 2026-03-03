@@ -143,11 +143,6 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
         s.stock_profile,
         s.timestamp,
         s.close,
-        CASE
-            WHEN s.open_price = 0
-            AND s.previous != 0 THEN s.previous
-            ELSE s.open_price
-        END AS open_price,
         -- suspension check
         s.volume,
         -- derived features
@@ -179,7 +174,7 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
             WHEN s.high != s.low THEN (s.close - s.low) / NULLIF(s.high - s.low, 0)
             ELSE 0.5
         END AS close_position,
-        close / MAX(close) OVER w120 - 1 AS drawdown,
+        close / MAX(close) OVER w60 - 1 AS drawdown,
         -- step counter
         ROW_NUMBER() OVER (
             PARTITION BY s.stock_profile
@@ -193,10 +188,10 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
             ORDER BY
                 s.timestamp
         ),
-        w120 AS (
+        w60 AS (
             PARTITION BY stock_profile
             ORDER BY
-                timestamp ROWS BETWEEN 119 PRECEDING
+                timestamp ROWS BETWEEN 59 PRECEDING
                 AND CURRENT ROW
         )
 ),
@@ -233,7 +228,7 @@ FROM
     INNER JOIN market_base mb ON wb.timestamp = mb.timestamp
 WHERE
     wb.total_step >= @MIN_STEP
-    AND wb.step_count < (wb.total_step -120);
+    AND wb.step_count < (wb.total_step -60);
 
 DROP TABLE IF EXISTS stock_return_target;
 
@@ -337,99 +332,207 @@ WHERE
 
 DROP TABLE IF EXISTS stock_data_normalized;
 
-CREATE TEMPORARY TABLE stock_data_normalized AS
+CREATE TEMPORARY TABLE stock_data_normalized AS WITH base AS (
+    SELECT
+        stock_profile,
+        timestamp,
+        -- suspension check
+        SUM(volume = 0) OVER (
+            PARTITION BY stock_profile
+            ORDER BY
+                timestamp ROWS BETWEEN 60 PRECEDING
+                AND CURRENT ROW
+        ) AS zero_volume_count,
+        -- stock features
+        (ret_1d - AVG(ret_1d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(ret_1d) OVER w, 0),
+            0.00000001
+        ) AS ret_1d_n,
+        (ret_5d - AVG(ret_5d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(ret_5d) OVER w, 0),
+            0.00000001
+        ) AS ret_5d_n,
+        (ret_20d - AVG(ret_20d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(ret_20d) OVER w, 0),
+            0.00000001
+        ) AS ret_20d_n,
+        (gap - AVG(gap) OVER w) / COALESCE(NULLIF(STDDEV_SAMP(gap) OVER w, 0), 0.00000001) AS gap_n,
+        (intraday_range - AVG(intraday_range) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(intraday_range) OVER w, 0),
+            0.00000001
+        ) AS intraday_range_n,
+        close_position,
+        (vol_20 - AVG(vol_20) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(vol_20) OVER w, 0),
+            0.00000001
+        ) AS vol_20_n,
+        (drawdown - AVG(drawdown) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(drawdown) OVER w, 0),
+            0.00000001
+        ) AS drawdown_n,
+        (turnover - AVG(turnover) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(turnover) OVER w, 0),
+            0.00000001
+        ) AS turnover_n,
+        (foreign_flow - AVG(foreign_flow) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(foreign_flow) OVER w, 0),
+            0.00000001
+        ) AS foreign_flow_n,
+        (order_imbalance - AVG(order_imbalance) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(order_imbalance) OVER w, 0),
+            0.00000001
+        ) AS order_imbalance_n,
+        (spread_proxy - AVG(spread_proxy) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(spread_proxy) OVER w, 0),
+            0.00000001
+        ) AS spread_proxy_n,
+        -- Index features
+        (idx_ret_1d - AVG(idx_ret_1d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_ret_1d) OVER w, 0),
+            0.00000001
+        ) AS idx_ret_1d_n,
+        (idx_ret_5d - AVG(idx_ret_5d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_ret_5d) OVER w, 0),
+            0.00000001
+        ) AS idx_ret_5d_n,
+        (idx_close_pos - AVG(idx_close_pos) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_close_pos) OVER w, 0),
+            0.00000001
+        ) AS idx_close_pos_n,
+        (idx_range - AVG(idx_range) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_range) OVER w, 0),
+            0.00000001
+        ) AS idx_range_n,
+        (idx_vol_20 - AVG(idx_vol_20) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_vol_20) OVER w, 0),
+            0.00000001
+        ) AS idx_vol_20_n,
+        (idx_value_z_n - AVG(idx_value_z_n) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_value_z_n) OVER w, 0),
+            0.00000001
+        ) AS idx_value_z_n_n,
+        -- Currency Exchange Rate features
+        (
+            currency_exchange_rate_daily_return - AVG(currency_exchange_rate_daily_return) OVER w
+        ) / COALESCE(
+            NULLIF(
+                STDDEV_SAMP(currency_exchange_rate_daily_return) OVER w,
+                0
+            ),
+            0.00000001
+        ) AS currency_exchange_rate_daily_return_n,
+        (
+            currency_exchange_rate_log_return - AVG(currency_exchange_rate_log_return) OVER w
+        ) / COALESCE(
+            NULLIF(
+                STDDEV_SAMP(currency_exchange_rate_log_return) OVER w,
+                0
+            ),
+            0.00000001
+        ) AS currency_exchange_rate_log_return_n,
+        (
+            currency_exchange_rate_ma_7 - AVG(currency_exchange_rate_ma_7) OVER w
+        ) / COALESCE(
+            NULLIF(
+                STDDEV_SAMP(currency_exchange_rate_ma_7) OVER w,
+                0
+            ),
+            0.00000001
+        ) AS currency_exchange_rate_ma_7_n,
+        (
+            currency_exchange_rate_ma_30 - AVG(currency_exchange_rate_ma_30) OVER w
+        ) / COALESCE(
+            NULLIF(
+                STDDEV_SAMP(currency_exchange_rate_ma_30) OVER w,
+                0
+            ),
+            0.00000001
+        ) AS currency_exchange_rate_ma_30_n,
+        (
+            currency_exchange_rate_volatility_7 - AVG(currency_exchange_rate_volatility_7) OVER w
+        ) / COALESCE(
+            NULLIF(
+                STDDEV_SAMP(currency_exchange_rate_volatility_7) OVER w,
+                0
+            ),
+            0.00000001
+        ) AS currency_exchange_rate_volatility_7_n,
+        (
+            currency_exchange_rate_dist_from_ma30 - AVG(currency_exchange_rate_dist_from_ma30) OVER w
+        ) / COALESCE(
+            NULLIF(
+                STDDEV_SAMP(currency_exchange_rate_dist_from_ma30) OVER w,
+                0
+            ),
+            0.00000001
+        ) AS currency_exchange_rate_dist_from_ma30_n,
+        -- time features
+        dow_sin,
+        dow_cos,
+        woy_sin,
+        woy_cos,
+        month_sin,
+        month_cos,
+        ROW_NUMBER() OVER (
+            PARTITION BY stock_profile
+            ORDER BY
+                timestamp
+        ) AS step_count
+    FROM
+        stock_base WINDOW w AS (
+            PARTITION BY stock_profile
+            ORDER BY
+                timestamp ROWS BETWEEN 60 PRECEDING
+                AND 1 PRECEDING
+        )
+)
 SELECT
-    stock_profile,
-    timestamp,
-    -- Suspension check
-    volume,
-    -- normalized inputs
-    PERCENT_RANK() OVER (
-        PARTITION BY timestamp
-        ORDER BY
-            ret_1d
-    ) AS ret_1d_n,
-    PERCENT_RANK() OVER (
-        PARTITION BY timestamp
-        ORDER BY
-            ret_5d
-    ) AS ret_5d_n,
-    PERCENT_RANK() OVER (
-        PARTITION BY timestamp
-        ORDER BY
-            ret_20d
-    ) AS ret_20d_n,
-    PERCENT_RANK() OVER (
-        PARTITION BY timestamp
-        ORDER BY
-            gap
-    ) AS gap_n,
-    PERCENT_RANK() OVER (
-        PARTITION BY timestamp
-        ORDER BY
-            intraday_range
-    ) AS intraday_range_n,
-    close_position,
-    PERCENT_RANK() OVER (
-        PARTITION BY timestamp
-        ORDER BY
-            vol_20
-    ) AS vol_20_n,
-    PERCENT_RANK() OVER (
-        PARTITION BY timestamp
-        ORDER BY
-            drawdown
-    ) AS drawdown_n,
-    PERCENT_RANK() OVER (
-        PARTITION BY timestamp
-        ORDER BY
-            turnover
-    ) AS turnover_n,
-    PERCENT_RANK() OVER (
-        PARTITION BY timestamp
-        ORDER BY
-            foreign_flow
-    ) AS foreign_flow_n,
-    PERCENT_RANK() OVER (
-        PARTITION BY timestamp
-        ORDER BY
-            order_imbalance
-    ) AS order_imbalance_n,
-    PERCENT_RANK() OVER (
-        PARTITION BY timestamp
-        ORDER BY
-            spread_proxy
-    ) AS spread_n,
-    dow_sin,
-    dow_cos,
-    woy_sin,
-    woy_cos,
-    month_sin,
-    month_cos,
-    -- Index features
-    idx_ret_1d,
-    idx_ret_5d,
-    idx_close_pos,
-    idx_range,
-    idx_vol_20,
-    idx_value_z_n,
-    -- Currency Exchange Rate features
-    currency_exchange_rate_daily_return,
-    currency_exchange_rate_log_return,
-    currency_exchange_rate_ma_7,
-    currency_exchange_rate_ma_30,
-    currency_exchange_rate_volatility_7,
-    currency_exchange_rate_dist_from_ma30
+    *
 FROM
-    stock_base;
+    base
+WHERE
+    step_count > 60;
 
 DROP TABLE IF EXISTS stock_return_normalized;
 
 CREATE TEMPORARY TABLE stock_return_normalized AS
 SELECT
-    sdn.*,
+    sdn.stock_profile,
+    sdn.timestamp,
+    sdn.zero_volume_count,
+    sdn.ret_1d_n,
+    sdn.ret_5d_n,
+    sdn.ret_20d_n,
+    sdn.gap_n,
+    sdn.intraday_range_n,
+    sdn.close_position,
+    sdn.vol_20_n,
+    sdn.drawdown_n,
+    sdn.turnover_n,
+    sdn.foreign_flow_n,
+    sdn.order_imbalance_n,
+    sdn.spread_proxy_n,
+    sdn.idx_ret_1d_n,
+    sdn.idx_ret_5d_n,
+    sdn.idx_close_pos_n,
+    sdn.idx_range_n,
+    sdn.idx_vol_20_n,
+    sdn.idx_value_z_n_n,
+    sdn.currency_exchange_rate_daily_return_n,
+    sdn.currency_exchange_rate_log_return_n,
+    sdn.currency_exchange_rate_ma_7_n,
+    sdn.currency_exchange_rate_ma_30_n,
+    sdn.currency_exchange_rate_volatility_7_n,
+    sdn.currency_exchange_rate_dist_from_ma30_n,
+    sdn.dow_sin,
+    sdn.dow_cos,
+    sdn.woy_sin,
+    sdn.woy_cos,
+    sdn.month_sin,
+    sdn.month_cos,
+    -- Target
     PERCENT_RANK() OVER (
-        PARTITION BY timestamp
+        PARTITION BY srt.timestamp
         ORDER BY
             srt.future_return_5d
     ) AS future_return_5d,
@@ -451,7 +554,7 @@ CREATE TEMPORARY TABLE stock_vol_normalized AS
 SELECT
     n.stock_profile,
     n.timestamp,
-    n.volume,
+    n.zero_volume_count,
     n.ret_1d_n,
     n.ret_5d_n,
     n.ret_20d_n,
@@ -460,7 +563,7 @@ SELECT
     n.turnover_n,
     n.foreign_flow_n,
     n.order_imbalance_n,
-    n.spread_n,
+    n.spread_proxy_n,
     v.min_future_volume_20d,
     v.future_vol_20d,
     ROW_NUMBER() OVER (
@@ -487,7 +590,7 @@ SELECT
     n.turnover_n,
     n.foreign_flow_n,
     n.order_imbalance_n,
-    n.spread_n,
+    n.spread_proxy_n,
     ROW_NUMBER() OVER (
         PARTITION BY n.stock_profile
         ORDER BY
@@ -526,438 +629,25 @@ FROM
     JOIN stock_crash_target c ON n.stock_profile = c.stock_profile
     AND n.timestamp = c.timestamp;
 
-DROP TABLE IF EXISTS stock_return_index_scaler;
-
-CREATE TEMPORARY TABLE stock_return_index_scaler WITH ranked_data AS (
-    SELECT
-        stock_profile,
-        -- Index features
-        idx_ret_1d,
-        idx_ret_5d,
-        idx_close_pos,
-        idx_range,
-        idx_vol_20,
-        idx_value_z_n,
-        -- Currency Exchange Rate features
-        currency_exchange_rate_daily_return,
-        currency_exchange_rate_log_return,
-        currency_exchange_rate_ma_7,
-        currency_exchange_rate_ma_30,
-        currency_exchange_rate_volatility_7,
-        currency_exchange_rate_dist_from_ma30,
-        -- Index features
-        PERCENT_RANK() OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                idx_ret_1d
-        ) AS p_rank_idx_ret_1d,
-        PERCENT_RANK() OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                idx_ret_5d
-        ) AS p_rank_idx_ret_5d,
-        PERCENT_RANK() OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                idx_close_pos
-        ) AS p_rank_idx_close_pos,
-        PERCENT_RANK() OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                idx_range
-        ) AS p_rank_idx_range,
-        PERCENT_RANK() OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                idx_vol_20
-        ) AS p_rank_idx_vol_20,
-        PERCENT_RANK() OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                idx_value_z_n
-        ) AS p_rank_idx_value_z_n,
-        -- Currency Exchange Rate features
-        PERCENT_RANK() OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                currency_exchange_rate_daily_return
-        ) AS p_rank_currency_exchange_rate_daily_return,
-        PERCENT_RANK() OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                currency_exchange_rate_log_return
-        ) AS p_rank_currency_exchange_rate_log_return,
-        PERCENT_RANK() OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                currency_exchange_rate_ma_7
-        ) AS p_rank_currency_exchange_rate_ma_7,
-        PERCENT_RANK() OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                currency_exchange_rate_ma_30
-        ) AS p_rank_currency_exchange_rate_ma_30,
-        PERCENT_RANK() OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                currency_exchange_rate_volatility_7
-        ) AS p_rank_currency_exchange_rate_volatility_7,
-        PERCENT_RANK() OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                currency_exchange_rate_dist_from_ma30
-        ) AS p_rank_currency_exchange_rate_dist_from_ma30
-    FROM
-        stock_return_normalized
-    WHERE
-        step_count > ROUND(total_step * @VAL_RATIO, 0)
-)
-SELECT
-    stock_profile,
-    -- Index features
-    MAX(
-        CASE
-            WHEN p_rank_idx_ret_1d <= 0.25 THEN idx_ret_1d
-        END
-    ) AS q1_idx_ret_1d,
-    MAX(
-        CASE
-            WHEN p_rank_idx_ret_1d <= 0.50 THEN idx_ret_1d
-        END
-    ) AS median_idx_ret_1d,
-    MAX(
-        CASE
-            WHEN p_rank_idx_ret_1d <= 0.75 THEN idx_ret_1d
-        END
-    ) AS q3_idx_ret_1d,
-    MAX(
-        CASE
-            WHEN p_rank_idx_ret_5d <= 0.25 THEN idx_ret_5d
-        END
-    ) AS q1_idx_ret_5d,
-    MAX(
-        CASE
-            WHEN p_rank_idx_ret_5d <= 0.50 THEN idx_ret_5d
-        END
-    ) AS median_idx_ret_5d,
-    MAX(
-        CASE
-            WHEN p_rank_idx_ret_5d <= 0.75 THEN idx_ret_5d
-        END
-    ) AS q3_idx_ret_5d,
-    MAX(
-        CASE
-            WHEN p_rank_idx_close_pos <= 0.25 THEN idx_close_pos
-        END
-    ) AS q1_idx_close_pos,
-    MAX(
-        CASE
-            WHEN p_rank_idx_close_pos <= 0.50 THEN idx_close_pos
-        END
-    ) AS median_idx_close_pos,
-    MAX(
-        CASE
-            WHEN p_rank_idx_close_pos <= 0.75 THEN idx_close_pos
-        END
-    ) AS q3_idx_close_pos,
-    MAX(
-        CASE
-            WHEN p_rank_idx_range <= 0.25 THEN idx_range
-        END
-    ) AS q1_idx_range,
-    MAX(
-        CASE
-            WHEN p_rank_idx_range <= 0.50 THEN idx_range
-        END
-    ) AS median_idx_range,
-    MAX(
-        CASE
-            WHEN p_rank_idx_range <= 0.75 THEN idx_range
-        END
-    ) AS q3_idx_range,
-    MAX(
-        CASE
-            WHEN p_rank_idx_vol_20 <= 0.25 THEN idx_vol_20
-        END
-    ) AS q1_idx_vol_20,
-    MAX(
-        CASE
-            WHEN p_rank_idx_vol_20 <= 0.50 THEN idx_vol_20
-        END
-    ) AS median_idx_vol_20,
-    MAX(
-        CASE
-            WHEN p_rank_idx_vol_20 <= 0.75 THEN idx_vol_20
-        END
-    ) AS q3_idx_vol_20,
-    MAX(
-        CASE
-            WHEN p_rank_idx_value_z_n <= 0.25 THEN idx_value_z_n
-        END
-    ) AS q1_idx_value_z_n,
-    MAX(
-        CASE
-            WHEN p_rank_idx_value_z_n <= 0.50 THEN idx_value_z_n
-        END
-    ) AS median_idx_value_z_n,
-    MAX(
-        CASE
-            WHEN p_rank_idx_value_z_n <= 0.75 THEN idx_value_z_n
-        END
-    ) AS q3_idx_value_z_n,
-    -- Currency Exchange Rate features
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_daily_return <= 0.25 THEN currency_exchange_rate_daily_return
-        END
-    ) AS q1_currency_exchange_rate_daily_return,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_daily_return <= 0.50 THEN currency_exchange_rate_daily_return
-        END
-    ) AS median_currency_exchange_rate_daily_return,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_daily_return <= 0.75 THEN currency_exchange_rate_daily_return
-        END
-    ) AS q3_currency_exchange_rate_daily_return,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_log_return <= 0.25 THEN currency_exchange_rate_log_return
-        END
-    ) AS q1_currency_exchange_rate_log_return,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_log_return <= 0.50 THEN currency_exchange_rate_log_return
-        END
-    ) AS median_currency_exchange_rate_log_return,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_log_return <= 0.75 THEN currency_exchange_rate_log_return
-        END
-    ) AS q3_currency_exchange_rate_log_return,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_ma_7 <= 0.25 THEN currency_exchange_rate_ma_7
-        END
-    ) AS q1_currency_exchange_rate_ma_7,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_ma_7 <= 0.50 THEN currency_exchange_rate_ma_7
-        END
-    ) AS median_currency_exchange_rate_ma_7,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_ma_7 <= 0.75 THEN currency_exchange_rate_ma_7
-        END
-    ) AS q3_currency_exchange_rate_ma_7,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_ma_30 <= 0.25 THEN currency_exchange_rate_ma_30
-        END
-    ) AS q1_currency_exchange_rate_ma_30,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_ma_30 <= 0.50 THEN currency_exchange_rate_ma_30
-        END
-    ) AS median_currency_exchange_rate_ma_30,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_ma_30 <= 0.75 THEN currency_exchange_rate_ma_30
-        END
-    ) AS q3_currency_exchange_rate_ma_30,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_volatility_7 <= 0.25 THEN currency_exchange_rate_volatility_7
-        END
-    ) AS q1_currency_exchange_rate_volatility_7,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_volatility_7 <= 0.50 THEN currency_exchange_rate_volatility_7
-        END
-    ) AS median_currency_exchange_rate_volatility_7,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_volatility_7 <= 0.75 THEN currency_exchange_rate_volatility_7
-        END
-    ) AS q3_currency_exchange_rate_volatility_7,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_dist_from_ma30 <= 0.25 THEN currency_exchange_rate_dist_from_ma30
-        END
-    ) AS q1_currency_exchange_rate_dist_from_ma30,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_dist_from_ma30 <= 0.50 THEN currency_exchange_rate_dist_from_ma30
-        END
-    ) AS median_currency_exchange_rate_dist_from_ma30,
-    MAX(
-        CASE
-            WHEN p_rank_currency_exchange_rate_dist_from_ma30 <= 0.75 THEN currency_exchange_rate_dist_from_ma30
-        END
-    ) AS q3_currency_exchange_rate_dist_from_ma30
-FROM
-    ranked_data
-GROUP BY
-    stock_profile;
-
 DROP TABLE IF EXISTS stock_return_train;
 
 DROP TABLE IF EXISTS stock_return_val;
 
 CREATE TABLE stock_return_train AS
 SELECT
-    srn.stock_profile,
-    srn.timestamp,
-    srn.volume,
-    -- normalized inputs
-    srn.ret_1d_n,
-    srn.ret_5d_n,
-    srn.ret_20d_n,
-    srn.gap_n,
-    srn.intraday_range_n,
-    srn.close_position,
-    srn.vol_20_n,
-    srn.drawdown_n,
-    srn.turnover_n,
-    srn.foreign_flow_n,
-    srn.order_imbalance_n,
-    srn.spread_n,
-    srn.dow_sin,
-    srn.dow_cos,
-    srn.woy_sin,
-    srn.woy_cos,
-    srn.month_sin,
-    srn.month_cos,
-    -- Index features
-    (srn.idx_ret_1d - sris.median_idx_ret_1d) / NULLIF(sris.q3_idx_ret_1d - sris.q1_idx_ret_1d, 0) AS idx_ret_1d_n,
-    (srn.idx_ret_5d - sris.median_idx_ret_5d) / NULLIF(sris.q3_idx_ret_5d - sris.q1_idx_ret_5d, 0) AS idx_ret_5d_n,
-    (srn.idx_close_pos - sris.median_idx_close_pos) / NULLIF(sris.q3_idx_close_pos - sris.q1_idx_close_pos, 0) AS idx_close_pos_n,
-    (srn.idx_range - sris.median_idx_range) / NULLIF(sris.q3_idx_range - sris.q1_idx_range, 0) AS idx_range_n,
-    (srn.idx_vol_20 - sris.median_idx_vol_20) / NULLIF(sris.q3_idx_vol_20 - sris.q1_idx_vol_20, 0) AS idx_vol_20_n,
-    (srn.idx_value_z_n - sris.median_idx_value_z_n) / NULLIF(sris.q3_idx_value_z_n - sris.q1_idx_value_z_n, 0) AS idx_value_z_n_n,
-    -- Currency Exchange Rate features
-    (
-        srn.currency_exchange_rate_daily_return - sris.median_currency_exchange_rate_daily_return
-    ) / NULLIF(
-        sris.q3_currency_exchange_rate_daily_return - q1_currency_exchange_rate_daily_return,
-        0
-    ) AS currency_exchange_rate_daily_return_n,
-    (
-        srn.currency_exchange_rate_log_return - sris.median_currency_exchange_rate_log_return
-    ) / NULLIF(
-        sris.q3_currency_exchange_rate_log_return - q1_currency_exchange_rate_log_return,
-        0
-    ) AS currency_exchange_rate_log_return_n,
-    (
-        srn.currency_exchange_rate_ma_7 - sris.median_currency_exchange_rate_ma_7
-    ) / NULLIF(
-        sris.q3_currency_exchange_rate_ma_7 - q1_currency_exchange_rate_ma_7,
-        0
-    ) AS currency_exchange_rate_ma_7_n,
-    (
-        srn.currency_exchange_rate_ma_30 - sris.median_currency_exchange_rate_ma_30
-    ) / NULLIF(
-        sris.q3_currency_exchange_rate_ma_30 - q1_currency_exchange_rate_ma_30,
-        0
-    ) AS currency_exchange_rate_ma_30_n,
-    (
-        srn.currency_exchange_rate_volatility_7 - sris.median_currency_exchange_rate_volatility_7
-    ) / NULLIF(
-        sris.q3_currency_exchange_rate_volatility_7 - q1_currency_exchange_rate_volatility_7,
-        0
-    ) AS currency_exchange_rate_volatility_7_n,
-    (
-        srn.currency_exchange_rate_dist_from_ma30 - sris.median_currency_exchange_rate_dist_from_ma30
-    ) / NULLIF(
-        sris.q3_currency_exchange_rate_dist_from_ma30 - q1_currency_exchange_rate_dist_from_ma30,
-        0
-    ) AS currency_exchange_rate_dist_from_ma30_n,
-    -- target
-    srn.future_return_5d,
-    srn.future_volume_5d
+    *
 FROM
-    stock_return_normalized srn
-    INNER JOIN stock_return_index_scaler sris ON srn.stock_profile = sris.stock_profile
+    stock_return_normalized
 WHERE
-    srn.step_count > ROUND(srn.total_step * @VAL_RATIO, 0);
+    step_count > ROUND(total_step * @VAL_RATIO, 0);
 
 CREATE TABLE stock_return_val AS
 SELECT
-    srn.stock_profile,
-    srn.timestamp,
-    srn.volume,
-    -- normalized inputs
-    srn.ret_1d_n,
-    srn.ret_5d_n,
-    srn.ret_20d_n,
-    srn.gap_n,
-    srn.intraday_range_n,
-    srn.close_position,
-    srn.vol_20_n,
-    srn.drawdown_n,
-    srn.turnover_n,
-    srn.foreign_flow_n,
-    srn.order_imbalance_n,
-    srn.spread_n,
-    srn.dow_sin,
-    srn.dow_cos,
-    srn.woy_sin,
-    srn.woy_cos,
-    srn.month_sin,
-    srn.month_cos,
-    -- Index features
-    (srn.idx_ret_1d - sris.median_idx_ret_1d) / NULLIF(sris.q3_idx_ret_1d - sris.q1_idx_ret_1d, 0) AS idx_ret_1d_n,
-    (srn.idx_ret_5d - sris.median_idx_ret_5d) / NULLIF(sris.q3_idx_ret_5d - sris.q1_idx_ret_5d, 0) AS idx_ret_5d_n,
-    (srn.idx_close_pos - sris.median_idx_close_pos) / NULLIF(sris.q3_idx_close_pos - sris.q1_idx_close_pos, 0) AS idx_close_pos_n,
-    (srn.idx_range - sris.median_idx_range) / NULLIF(sris.q3_idx_range - sris.q1_idx_range, 0) AS idx_range_n,
-    (srn.idx_vol_20 - sris.median_idx_vol_20) / NULLIF(sris.q3_idx_vol_20 - sris.q1_idx_vol_20, 0) AS idx_vol_20_n,
-    (srn.idx_value_z_n - sris.median_idx_value_z_n) / NULLIF(sris.q3_idx_value_z_n - sris.q1_idx_value_z_n, 0) AS idx_value_z_n_n,
-    -- Currency Exchange Rate features
-    (
-        srn.currency_exchange_rate_daily_return - sris.median_currency_exchange_rate_daily_return
-    ) / NULLIF(
-        sris.q3_currency_exchange_rate_daily_return - q1_currency_exchange_rate_daily_return,
-        0
-    ) AS currency_exchange_rate_daily_return_n,
-    (
-        srn.currency_exchange_rate_log_return - sris.median_currency_exchange_rate_log_return
-    ) / NULLIF(
-        sris.q3_currency_exchange_rate_log_return - q1_currency_exchange_rate_log_return,
-        0
-    ) AS currency_exchange_rate_log_return_n,
-    (
-        srn.currency_exchange_rate_ma_7 - sris.median_currency_exchange_rate_ma_7
-    ) / NULLIF(
-        sris.q3_currency_exchange_rate_ma_7 - q1_currency_exchange_rate_ma_7,
-        0
-    ) AS currency_exchange_rate_ma_7_n,
-    (
-        srn.currency_exchange_rate_ma_30 - sris.median_currency_exchange_rate_ma_30
-    ) / NULLIF(
-        sris.q3_currency_exchange_rate_ma_30 - q1_currency_exchange_rate_ma_30,
-        0
-    ) AS currency_exchange_rate_ma_30_n,
-    (
-        srn.currency_exchange_rate_volatility_7 - sris.median_currency_exchange_rate_volatility_7
-    ) / NULLIF(
-        sris.q3_currency_exchange_rate_volatility_7 - q1_currency_exchange_rate_volatility_7,
-        0
-    ) AS currency_exchange_rate_volatility_7_n,
-    (
-        srn.currency_exchange_rate_dist_from_ma30 - sris.median_currency_exchange_rate_dist_from_ma30
-    ) / NULLIF(
-        sris.q3_currency_exchange_rate_dist_from_ma30 - q1_currency_exchange_rate_dist_from_ma30,
-        0
-    ) AS currency_exchange_rate_dist_from_ma30_n,
-    -- target
-    srn.future_return_5d,
-    srn.future_volume_5d
+    *
 FROM
-    stock_return_normalized srn
-    INNER JOIN stock_return_index_scaler sris ON srn.stock_profile = sris.stock_profile
+    stock_return_normalized
 WHERE
-    srn.step_count <= ROUND(srn.total_step * @VAL_RATIO, 0);
+    step_count <= ROUND(total_step * @VAL_RATIO, 0);
 
 DROP TABLE IF EXISTS stock_vol_train;
 
@@ -967,7 +657,7 @@ CREATE TABLE stock_vol_train AS
 SELECT
     stock_profile,
     timestamp,
-    volume,
+    zero_volume_count,
     ret_1d_n,
     ret_5d_n,
     ret_20d_n,
@@ -976,7 +666,7 @@ SELECT
     turnover_n,
     foreign_flow_n,
     order_imbalance_n,
-    spread_n,
+    spread_proxy_n,
     min_future_volume_20d,
     future_vol_20d
 FROM
@@ -988,7 +678,7 @@ CREATE TABLE stock_vol_val AS
 SELECT
     stock_profile,
     timestamp,
-    volume,
+    zero_volume_count,
     ret_1d_n,
     ret_5d_n,
     ret_20d_n,
@@ -997,7 +687,7 @@ SELECT
     turnover_n,
     foreign_flow_n,
     order_imbalance_n,
-    spread_n,
+    spread_proxy_n,
     min_future_volume_20d,
     future_vol_20d
 FROM
@@ -1020,7 +710,7 @@ SELECT
     turnover_n,
     foreign_flow_n,
     order_imbalance_n,
-    spread_n,
+    spread_proxy_n,
     future_drawdown_20d
 FROM
     stock_drawdown_normalized
@@ -1038,7 +728,7 @@ SELECT
     turnover_n,
     foreign_flow_n,
     order_imbalance_n,
-    spread_n,
+    spread_proxy_n,
     future_drawdown_20d
 FROM
     stock_drawdown_normalized

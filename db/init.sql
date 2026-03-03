@@ -79,8 +79,8 @@ CREATE TABLE currencies(
 );
 
 CREATE TABLE currency_exchange_rates (
-    `primary_code` VARCHAR(5) NOT NULL UNIQUE,
-    `secondary_code` VARCHAR(5) NOT NULL UNIQUE,
+    `primary_code` VARCHAR(5) NOT NULL,
+    `secondary_code` VARCHAR(5) NOT NULL,
     `primary_value` DOUBLE NOT NULL,
     `secondary_value` DOUBLE NOT NULL,
     `timestamp` TIMESTAMP NOT NULL,

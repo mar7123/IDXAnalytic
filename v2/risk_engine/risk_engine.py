@@ -1,7 +1,7 @@
 import pandas as pd
 from sqlalchemy import Engine, text
 
-from risk_engine.config import ALL_FEATURES, CRASH_TARGET, INDEX_CODE, NUM_FEATURES, PREP_SQL, CLEAN_SQL
+from risk_engine.config import ALL_FEATURES, CRASH_TARGET, PREP_SQL, CLEAN_SQL
 from risk_engine.train_crash import train_crash_model
 from risk_engine.train_regime import train_regime_model
 from risk_engine.train_volatility import train_vol_model

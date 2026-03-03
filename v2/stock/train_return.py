@@ -1,8 +1,8 @@
 from keras.models import Model
 from keras.layers import Input, Dense, Dropout, LayerNormalization, Embedding, Flatten, Concatenate, RepeatVector
 from keras.optimizers import Adam
-from keras.losses import Huber, MeanAbsoluteError
-# from keras.metrics import MeanAbsoluteError
+from keras.losses import BinaryCrossentropy
+from keras.metrics import MeanAbsoluteError
 import pandas as pd
 from sqlalchemy import Engine
 from tcn import TCN
@@ -50,37 +50,36 @@ def build_return_model(engine: Engine):
         val_df, stock_profile_mapper)
 
     ts_input = Input(shape=(WINDOW, X_train.shape[-1]), name="ts_input")
-
     stock_id_input = Input(shape=(1,), name="stock_id_input")
+
     emb = Embedding(input_dim=len(stock_profile_mapper),
-                    output_dim=20)(stock_id_input)
-    emb = Flatten()(emb)
+                    output_dim=18)(stock_id_input)
+    emb_flat = Flatten()(emb)
 
     x = TCN(
         nb_filters=64,
-        kernel_size=8,
-        dilations=[1, 2, 4, 8, 16, 32],
+        kernel_size=3,
+        dilations=[1, 2, 4, 8, 16],
         padding="causal",
-        dropout_rate=0.1,
+        dropout_rate=0.2,
         return_sequences=False
     )(ts_input)
     x = LayerNormalization()(x)
 
-    merged = Concatenate()([x, emb])
+    merged = Concatenate()([x, emb_flat])
 
-    x = Dense(64, activation="relu")(merged)
-    x = Dropout(0.1)(x)
+    x = Dense(32, activation="relu")(merged)
+    x = Dropout(0.2)(x)
+    x = Dense(16, activation="relu")(x)
 
-    z = Dense(32, activation="relu")(x)
-    z = Dropout(0.1)(z)
-
-    output = Dense(1, activation="sigmoid")(z)
+    output = Dense(1, activation="sigmoid")(x)
 
     model = Model(inputs=[ts_input, stock_id_input], outputs=output)
 
     model.compile(
         optimizer=Adam(learning_rate=1e-6),
-        loss=MeanAbsoluteError(),
+        loss=BinaryCrossentropy(),
+        metrics=[MeanAbsoluteError()]
     )
     model.fit(
         x={

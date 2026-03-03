@@ -21,7 +21,7 @@ RETURN_FEATURE_COLS = [
     "gap_n", "intraday_range_n", "close_position",
     "vol_20_n", "drawdown_n",
     "turnover_n", "foreign_flow_n",
-    "order_imbalance_n", "spread_n",
+    "order_imbalance_n", "spread_proxy_n",
     "dow_sin", "dow_cos", "woy_sin", "woy_cos",
     "month_sin", "month_cos"
 ]
@@ -35,7 +35,7 @@ VOL_FEATURES = [
     "turnover_n",
     "foreign_flow_n",
     "order_imbalance_n",
-    "spread_n",
+    "spread_proxy_n",
 ]
 
 DD_FEATURES = [
@@ -46,7 +46,7 @@ DD_FEATURES = [
     "turnover_n",
     "foreign_flow_n",
     "order_imbalance_n",
-    "spread_n",
+    "spread_proxy_n",
 ]
 
 CRASH_FEATURES = [

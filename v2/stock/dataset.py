@@ -9,16 +9,15 @@ def make_return_sequences(df: pd.DataFrame, stock_profile_mapper: dict[str, int]
     for stock_profile, g in df.groupby("stock_profile"):
         stock_id = stock_profile_mapper[stock_profile]
         g = g.sort_values("timestamp")
-        values = g[RETURN_FEATURE_COLS + INDEX_FEATURE_COLS +
-                   CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
-        volumes = g["volume"].values
+        values = g[RETURN_FEATURE_COLS + INDEX_FEATURE_COLS + CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
+        zero_volume_counts = g["zero_volume_count"].values
         targets = g["future_return_5d"].values
         future_vols = g["future_volume_5d"].values
 
         for i in range(len(g) - WINDOW):
-            current_volume = volumes[i:i+WINDOW]
+            zero_volume_count = zero_volume_counts[i:i+WINDOW]
             future_vol = future_vols[i+WINDOW]
-            if future_vol == 0 or 0 in current_volume:
+            if future_vol == 0 or any(x > 0 for x in zero_volume_count):
                 continue
             X.append(values[i:i+WINDOW])
             X_id.append(stock_id)
@@ -33,14 +32,14 @@ def make_vol_sequences(df: pd.DataFrame):
     for _, g in df.groupby("stock_profile"):
         g = g.sort_values("timestamp")
         values = g[VOL_FEATURES].values
-        volumes = g["volume"].values
+        zero_volume_counts = g["zero_volume_count"].values
         targets = g["future_vol_20d"].values
         future_vols = g["min_future_volume_20d"].values
 
         for i in range(len(g) - WINDOW):
-            current_volume = volumes[i:i+WINDOW]
+            zero_volume_count = zero_volume_counts[i:i+WINDOW]
             future_vol = future_vols[i+WINDOW]
-            if future_vol == 0 or 0 in current_volume:
+            if future_vol == 0 or any(x > 0 for x in zero_volume_count):
                 continue
             X.append(values[i:i+WINDOW])
             y.append(targets[i+WINDOW])

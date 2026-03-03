@@ -22,9 +22,9 @@ DROP TABLE IF EXISTS stock_crash_normalized;
 
 DROP TABLE IF EXISTS stock_return_index_scaler;
 
-DROP TABLE IF EXISTS stock_return_train;
+-- DROP TABLE IF EXISTS stock_return_train;
 
-DROP TABLE IF EXISTS stock_return_val;
+-- DROP TABLE IF EXISTS stock_return_val;
 
 DROP TABLE IF EXISTS stock_vol_train;
 

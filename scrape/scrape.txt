@@ -1,5 +1,80 @@
 start
 Query SELECT * from time_dimensions
-2023-05-23-2026-02-16
+20260217
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+data empty
+20260218
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+INSERT IGNORE INTO index_profiles (index_code) VALUE (:index_code) Affected rows 0
+INSERT IGNORE INTO index_data VALUE (:index_profile, :timestamp, :previous, :highest, :lowest, :close, :number_of_stock, :change, :volume, :value, :frequency, :market_capital) Affected rows 45
+INSERT INTO stock_profiles VALUE (:stock_code, :stock_name, :remarks, :delisting_date) ON DUPLICATE KEY UPDATE delisting_date = delisting_date Affected rows 958
+INSERT IGNORE INTO stock_data VALUE (:stock_profile, :timestamp, :previous, :open_price, :first_trade, :high, :low, :close, :change, :volume, :value, :frequency, :index_individual, :offer, :offer_volume, :bid, :bid_volume, :listed_shares, :tradeble_shares, :weight_for_index, :foreign_sell, :foreign_buy, :non_regular_volume, :non_regular_value, :non_regular_frequency, :persen, :percentage) Affected rows 958
+20260219
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+INSERT IGNORE INTO index_profiles (index_code) VALUE (:index_code) Affected rows 0
+INSERT IGNORE INTO index_data VALUE (:index_profile, :timestamp, :previous, :highest, :lowest, :close, :number_of_stock, :change, :volume, :value, :frequency, :market_capital) Affected rows 45
+INSERT INTO stock_profiles VALUE (:stock_code, :stock_name, :remarks, :delisting_date) ON DUPLICATE KEY UPDATE delisting_date = delisting_date Affected rows 958
+INSERT IGNORE INTO stock_data VALUE (:stock_profile, :timestamp, :previous, :open_price, :first_trade, :high, :low, :close, :change, :volume, :value, :frequency, :index_individual, :offer, :offer_volume, :bid, :bid_volume, :listed_shares, :tradeble_shares, :weight_for_index, :foreign_sell, :foreign_buy, :non_regular_volume, :non_regular_value, :non_regular_frequency, :persen, :percentage) Affected rows 958
+20260220
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+INSERT IGNORE INTO index_profiles (index_code) VALUE (:index_code) Affected rows 0
+INSERT IGNORE INTO index_data VALUE (:index_profile, :timestamp, :previous, :highest, :lowest, :close, :number_of_stock, :change, :volume, :value, :frequency, :market_capital) Affected rows 45
+INSERT INTO stock_profiles VALUE (:stock_code, :stock_name, :remarks, :delisting_date) ON DUPLICATE KEY UPDATE delisting_date = delisting_date Affected rows 958
+INSERT IGNORE INTO stock_data VALUE (:stock_profile, :timestamp, :previous, :open_price, :first_trade, :high, :low, :close, :change, :volume, :value, :frequency, :index_individual, :offer, :offer_volume, :bid, :bid_volume, :listed_shares, :tradeble_shares, :weight_for_index, :foreign_sell, :foreign_buy, :non_regular_volume, :non_regular_value, :non_regular_frequency, :persen, :percentage) Affected rows 958
+20260221
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+data empty
+20260222
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+data empty
+20260223
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+INSERT IGNORE INTO index_profiles (index_code) VALUE (:index_code) Affected rows 0
+INSERT IGNORE INTO index_data VALUE (:index_profile, :timestamp, :previous, :highest, :lowest, :close, :number_of_stock, :change, :volume, :value, :frequency, :market_capital) Affected rows 45
+INSERT INTO stock_profiles VALUE (:stock_code, :stock_name, :remarks, :delisting_date) ON DUPLICATE KEY UPDATE delisting_date = delisting_date Affected rows 958
+INSERT IGNORE INTO stock_data VALUE (:stock_profile, :timestamp, :previous, :open_price, :first_trade, :high, :low, :close, :change, :volume, :value, :frequency, :index_individual, :offer, :offer_volume, :bid, :bid_volume, :listed_shares, :tradeble_shares, :weight_for_index, :foreign_sell, :foreign_buy, :non_regular_volume, :non_regular_value, :non_regular_frequency, :persen, :percentage) Affected rows 958
+20260224
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+INSERT IGNORE INTO index_profiles (index_code) VALUE (:index_code) Affected rows 0
+INSERT IGNORE INTO index_data VALUE (:index_profile, :timestamp, :previous, :highest, :lowest, :close, :number_of_stock, :change, :volume, :value, :frequency, :market_capital) Affected rows 45
+INSERT INTO stock_profiles VALUE (:stock_code, :stock_name, :remarks, :delisting_date) ON DUPLICATE KEY UPDATE delisting_date = delisting_date Affected rows 958
+INSERT IGNORE INTO stock_data VALUE (:stock_profile, :timestamp, :previous, :open_price, :first_trade, :high, :low, :close, :change, :volume, :value, :frequency, :index_individual, :offer, :offer_volume, :bid, :bid_volume, :listed_shares, :tradeble_shares, :weight_for_index, :foreign_sell, :foreign_buy, :non_regular_volume, :non_regular_value, :non_regular_frequency, :persen, :percentage) Affected rows 958
+20260225
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+INSERT IGNORE INTO index_profiles (index_code) VALUE (:index_code) Affected rows 0
+INSERT IGNORE INTO index_data VALUE (:index_profile, :timestamp, :previous, :highest, :lowest, :close, :number_of_stock, :change, :volume, :value, :frequency, :market_capital) Affected rows 45
+INSERT INTO stock_profiles VALUE (:stock_code, :stock_name, :remarks, :delisting_date) ON DUPLICATE KEY UPDATE delisting_date = delisting_date Affected rows 958
+INSERT IGNORE INTO stock_data VALUE (:stock_profile, :timestamp, :previous, :open_price, :first_trade, :high, :low, :close, :change, :volume, :value, :frequency, :index_individual, :offer, :offer_volume, :bid, :bid_volume, :listed_shares, :tradeble_shares, :weight_for_index, :foreign_sell, :foreign_buy, :non_regular_volume, :non_regular_value, :non_regular_frequency, :persen, :percentage) Affected rows 958
+20260226
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+INSERT IGNORE INTO index_profiles (index_code) VALUE (:index_code) Affected rows 0
+INSERT IGNORE INTO index_data VALUE (:index_profile, :timestamp, :previous, :highest, :lowest, :close, :number_of_stock, :change, :volume, :value, :frequency, :market_capital) Affected rows 45
+INSERT INTO stock_profiles VALUE (:stock_code, :stock_name, :remarks, :delisting_date) ON DUPLICATE KEY UPDATE delisting_date = delisting_date Affected rows 958
+INSERT IGNORE INTO stock_data VALUE (:stock_profile, :timestamp, :previous, :open_price, :first_trade, :high, :low, :close, :change, :volume, :value, :frequency, :index_individual, :offer, :offer_volume, :bid, :bid_volume, :listed_shares, :tradeble_shares, :weight_for_index, :foreign_sell, :foreign_buy, :non_regular_volume, :non_regular_value, :non_regular_frequency, :persen, :percentage) Affected rows 958
+20260227
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+INSERT IGNORE INTO index_profiles (index_code) VALUE (:index_code) Affected rows 0
+INSERT IGNORE INTO index_data VALUE (:index_profile, :timestamp, :previous, :highest, :lowest, :close, :number_of_stock, :change, :volume, :value, :frequency, :market_capital) Affected rows 45
+INSERT INTO stock_profiles VALUE (:stock_code, :stock_name, :remarks, :delisting_date) ON DUPLICATE KEY UPDATE delisting_date = delisting_date Affected rows 958
+INSERT IGNORE INTO stock_data VALUE (:stock_profile, :timestamp, :previous, :open_price, :first_trade, :high, :low, :close, :change, :volume, :value, :frequency, :index_individual, :offer, :offer_volume, :bid, :bid_volume, :listed_shares, :tradeble_shares, :weight_for_index, :foreign_sell, :foreign_buy, :non_regular_volume, :non_regular_value, :non_regular_frequency, :persen, :percentage) Affected rows 958
+20260228
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+data empty
+20260301
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+data empty
+20260302
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+INSERT IGNORE INTO index_profiles (index_code) VALUE (:index_code) Affected rows 0
+INSERT IGNORE INTO index_data VALUE (:index_profile, :timestamp, :previous, :highest, :lowest, :close, :number_of_stock, :change, :volume, :value, :frequency, :market_capital) Affected rows 45
+INSERT INTO stock_profiles VALUE (:stock_code, :stock_name, :remarks, :delisting_date) ON DUPLICATE KEY UPDATE delisting_date = delisting_date Affected rows 958
+INSERT IGNORE INTO stock_data VALUE (:stock_profile, :timestamp, :previous, :open_price, :first_trade, :high, :low, :close, :change, :volume, :value, :frequency, :index_individual, :offer, :offer_volume, :bid, :bid_volume, :listed_shares, :tradeble_shares, :weight_for_index, :foreign_sell, :foreign_buy, :non_regular_volume, :non_regular_value, :non_regular_frequency, :persen, :percentage) Affected rows 958
+20260303
+INSERT IGNORE INTO time_dimensions VALUES (:tm) Affected rows 1
+INSERT IGNORE INTO index_profiles (index_code) VALUE (:index_code) Affected rows 0
+INSERT IGNORE INTO index_data VALUE (:index_profile, :timestamp, :previous, :highest, :lowest, :close, :number_of_stock, :change, :volume, :value, :frequency, :market_capital) Affected rows 45
+INSERT INTO stock_profiles VALUE (:stock_code, :stock_name, :remarks, :delisting_date) ON DUPLICATE KEY UPDATE delisting_date = delisting_date Affected rows 958
+INSERT IGNORE INTO stock_data VALUE (:stock_profile, :timestamp, :previous, :open_price, :first_trade, :high, :low, :close, :change, :volume, :value, :frequency, :index_individual, :offer, :offer_volume, :bid, :bid_volume, :listed_shares, :tradeble_shares, :weight_for_index, :foreign_sell, :foreign_buy, :non_regular_volume, :non_regular_value, :non_regular_frequency, :persen, :percentage) Affected rows 958
+2026-02-17-2026-03-03
 INSERT IGNORE INTO currencies VALUES (:code) Affected rows 0
-INSERT IGNORE INTO currency_exchange_rates VALUES (:primary_code, :secondary_code, :primary_value, :secondary_value, :timestamp) Affected rows 35
+INSERT IGNORE INTO currency_exchange_rates VALUES (:primary_code, :secondary_code, :primary_value, :secondary_value, :timestamp) Affected rows 11

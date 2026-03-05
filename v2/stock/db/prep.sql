@@ -7,9 +7,6 @@ SET
 SET
     @VAL_RATIO := 0.2;
 
-SET
-    @MIN_STEP := 520;
-
 DELETE FROM
     stock_profiles
 WHERE
@@ -34,40 +31,17 @@ DROP TABLE IF EXISTS market_base;
 CREATE TEMPORARY TABLE market_base AS WITH index_base AS (
     SELECT
         timestamp,
-        (close / previous) - 1 AS idx_ret_1d,
-        (
-            close / LAG(close, 5) OVER (
-                ORDER BY
-                    timestamp
-            )
-        ) - 1 AS idx_ret_5d,
         CASE
             WHEN highest = lowest THEN 0.5
             ELSE (close - lowest) / (highest - lowest)
         END AS idx_close_pos,
-        (highest - lowest) / previous AS idx_range,
-        value AS idx_value,
-        ROW_NUMBER() OVER (
-            ORDER BY
-                timestamp ASC
-        ) AS step_count
+        highest,
+        lowest,
+        value AS idx_value
     FROM
         index_data
     WHERE
         index_profile = "COMPOSITE"
-),
-index_window_base AS (
-    SELECT
-        *,
-        STDDEV(idx_ret_1d) OVER w idx_vol_20,
-        AVG(idx_value) OVER w avg_val_20,
-        STDDEV(idx_value) OVER w AS std_val_20
-    FROM
-        index_base WINDOW w AS (
-            ORDER BY
-                timestamp ROWS BETWEEN 19 PRECEDING
-                AND CURRENT ROW
-        )
 ),
 currency_exchange_base AS (
     SELECT
@@ -79,62 +53,78 @@ currency_exchange_base AS (
         primary_code = "USD"
         AND secondary_code = "IDR"
 ),
-merged_timestamp_base AS(
+merged_timestamp_base AS (
     SELECT
-        iwb.*,
-        -- Currency exchange features
-        ceb.currency_exchange_rate,
-        LAG(ceb.currency_exchange_rate, 1) OVER (
-            ORDER BY
-                iwb.timestamp
-        ) AS prev_currency_exchange_rate,
-        AVG(ceb.currency_exchange_rate) OVER (
-            ORDER BY
-                iwb.timestamp ROWS BETWEEN 6 PRECEDING
-                AND CURRENT ROW
-        ) AS currency_exchange_rate_ma_7,
-        AVG(ceb.currency_exchange_rate) OVER (
-            ORDER BY
-                iwb.timestamp ROWS BETWEEN 29 PRECEDING
-                AND CURRENT ROW
-        ) AS currency_exchange_rate_ma_30,
-        STDDEV(ceb.currency_exchange_rate) OVER (
-            ORDER BY
-                iwb.timestamp ROWS BETWEEN 6 PRECEDING
-                AND CURRENT ROW
-        ) AS currency_exchange_rate_volatility_7
+        ib.*,
+        ceb.currency_exchange_rate
     FROM
-        index_window_base iwb
-        INNER JOIN currency_exchange_base ceb ON iwb.timestamp = ceb.timestamp
+        index_base ib
+        INNER JOIN currency_exchange_base ceb ON ib.timestamp = ceb.timestamp
+),
+base AS (
+    SELECT
+        timestamp,
+        -- Index features
+        idx_close_pos,
+        (highest - lowest) / LAG(idx_value, 1) OVER w20 AS idx_range,
+        (idx_value / LAG(idx_value, 1) OVER w20) - 1 AS idx_ret_1d,
+        (idx_value / LAG(idx_value, 5) OVER w20) - 1 AS idx_ret_5d,
+        (idx_value / LAG(idx_value, 20) OVER w20) - 1 AS idx_ret_20d,
+        (idx_value / LAG(idx_value, 60) OVER w60) - 1 AS idx_ret_60d,
+        -- Currency features
+        (
+            currency_exchange_rate / LAG(currency_exchange_rate, 1) OVER w20
+        ) - 1 AS currency_exchange_rate_ret_1d,
+        (
+            currency_exchange_rate / LAG(currency_exchange_rate, 5) OVER w20
+        ) - 1 AS currency_exchange_rate_ret_5d,
+        (
+            currency_exchange_rate / LAG(currency_exchange_rate, 20) OVER w20
+        ) - 1 AS currency_exchange_rate_ret_20d,
+        (
+            currency_exchange_rate / LAG(currency_exchange_rate, 60) OVER w60
+        ) - 1 AS currency_exchange_rate_ret_60d
+    FROM
+        merged_timestamp_base WINDOW w20 AS (
+            ORDER BY
+                timestamp ROWS BETWEEN 19 PRECEDING
+                AND CURRENT ROW
+        ),
+        w60 AS (
+            ORDER BY
+                timestamp ROWS BETWEEN 59 PRECEDING
+                AND CURRENT ROW
+        )
+),
+window_base AS (
+    SELECT
+        *,
+        STDDEV_SAMP(idx_ret_1d) OVER w20 AS idx_vol_20d,
+        STDDEV_SAMP(idx_ret_1d) OVER w60 AS idx_vol_60d,
+        (idx_ret_1d / MAX(idx_ret_1d) OVER w20) - 1 AS idx_drawdown_20d,
+        (idx_ret_1d / MAX(idx_ret_1d) OVER w60) - 1 AS idx_drawdown_60d,
+        STDDEV_SAMP(currency_exchange_rate_ret_1d) OVER w20 AS currency_exchange_rate_vol_20d,
+        STDDEV_SAMP(currency_exchange_rate_ret_1d) OVER w60 AS currency_exchange_rate_vol_60d,
+        currency_exchange_rate_ret_1d - AVG(currency_exchange_rate_ret_1d) OVER w20 AS currency_exchange_rate_mr_20d,
+        currency_exchange_rate_ret_1d - AVG(currency_exchange_rate_ret_1d) OVER w60 AS currency_exchange_rate_mr_60d
+    FROM
+        base WINDOW w20 AS (
+            ORDER BY
+                timestamp ROWS BETWEEN 19 PRECEDING
+                AND CURRENT ROW
+        ),
+        w60 AS (
+            ORDER BY
+                timestamp ROWS BETWEEN 59 PRECEDING
+                AND CURRENT ROW
+        )
 )
 SELECT
-    timestamp,
-    idx_ret_1d,
-    idx_ret_5d,
-    idx_close_pos,
-    idx_range,
-    idx_vol_20,
-    (idx_value - avg_val_20) / NULLIF(std_val_20, 0) AS idx_value_z_n,
-    -- Currency exchange features
-    (
-        (
-            currency_exchange_rate - prev_currency_exchange_rate
-        ) / prev_currency_exchange_rate
-    ) AS currency_exchange_rate_daily_return,
-    LN(
-        currency_exchange_rate / prev_currency_exchange_rate
-    ) AS currency_exchange_rate_log_return,
-    currency_exchange_rate_ma_7,
-    currency_exchange_rate_ma_30,
-    currency_exchange_rate_volatility_7,
-    (
-        currency_exchange_rate - currency_exchange_rate_ma_30
-    ) / currency_exchange_rate_ma_30 AS currency_exchange_rate_dist_from_ma30
+    *
 FROM
-    merged_timestamp_base
+    window_base
 WHERE
-    idx_vol_20 IS NOT NULL
-    AND step_count > 30;
+    idx_ret_60d IS NOT NULL;
 
 DROP TABLE IF EXISTS stock_base;
 
@@ -152,8 +142,9 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
         (s.offer - s.bid) / NULLIF(close, 0) AS spread_proxy,
         -- returns
         (s.close - s.previous) / NULLIF(s.previous, 0) AS ret_1d,
-        (s.close / LAG(s.close, 5) OVER w) - 1 AS ret_5d,
-        (s.close / LAG(s.close, 20) OVER w) - 1 AS ret_20d,
+        (s.close / LAG(s.close, 5) OVER w20) - 1 AS ret_5d,
+        (s.close / LAG(s.close, 20) OVER w20) - 1 AS ret_20d,
+        (s.close / LAG(s.close, 20) OVER w60) - 1 AS ret_60d,
         -- time data
         SIN(2 * PI() * DAYOFWEEK(timestamp) / 7) AS dow_sin,
         COS(2 * PI() * DAYOFWEEK(timestamp) / 7) AS dow_cos,
@@ -174,19 +165,14 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
             WHEN s.high != s.low THEN (s.close - s.low) / NULLIF(s.high - s.low, 0)
             ELSE 0.5
         END AS close_position,
-        close / MAX(close) OVER w60 - 1 AS drawdown,
         -- step counter
-        ROW_NUMBER() OVER (
-            PARTITION BY s.stock_profile
-            ORDER BY
-                s.timestamp DESC
-        ) AS step_count,
         COUNT(*) OVER (PARTITION BY s.stock_profile) as total_step
     FROM
-        stock_data s WINDOW w AS (
-            PARTITION BY s.stock_profile
+        stock_data s WINDOW w20 AS (
+            PARTITION BY stock_profile
             ORDER BY
-                s.timestamp
+                timestamp ROWS BETWEEN 19 PRECEDING
+                AND CURRENT ROW
         ),
         w60 AS (
             PARTITION BY stock_profile
@@ -198,74 +184,72 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
 window_base AS (
     SELECT
         *,
-        STDDEV_SAMP(ret_1d) OVER w20 AS vol_20
+        (close / MAX(close) OVER w20) - 1 AS drawdown_20d,
+        (close / MAX(close) OVER w60) - 1 AS drawdown_60d,
+        STDDEV_SAMP(ret_1d) OVER w20 AS vol_20d,
+        STDDEV_SAMP(ret_1d) OVER w60 AS vol_60d
     FROM
         base WINDOW w20 AS (
             PARTITION BY stock_profile
             ORDER BY
                 timestamp ROWS BETWEEN 19 PRECEDING
                 AND CURRENT ROW
+        ),
+        w60 AS (
+            PARTITION BY stock_profile
+            ORDER BY
+                timestamp ROWS BETWEEN 59 PRECEDING
+                AND CURRENT ROW
         )
 )
 SELECT
     wb.*,
-    -- Index Features
-    mb.idx_ret_1d,
-    mb.idx_ret_5d,
     mb.idx_close_pos,
     mb.idx_range,
-    mb.idx_vol_20,
-    mb.idx_value_z_n,
-    -- Currency Exchange Rate features
-    mb.currency_exchange_rate_daily_return,
-    mb.currency_exchange_rate_log_return,
-    mb.currency_exchange_rate_ma_7,
-    mb.currency_exchange_rate_ma_30,
-    mb.currency_exchange_rate_volatility_7,
-    mb.currency_exchange_rate_dist_from_ma30
+    mb.idx_ret_1d,
+    mb.idx_ret_5d,
+    mb.idx_ret_20d,
+    mb.idx_ret_60d,
+    mb.currency_exchange_rate_ret_1d,
+    mb.currency_exchange_rate_ret_5d,
+    mb.currency_exchange_rate_ret_20d,
+    mb.currency_exchange_rate_ret_60d,
+    mb.idx_vol_20d,
+    mb.idx_vol_60d,
+    mb.idx_drawdown_20d,
+    mb.idx_drawdown_60d,
+    mb.currency_exchange_rate_vol_20d,
+    mb.currency_exchange_rate_vol_60d,
+    mb.currency_exchange_rate_mr_20d,
+    mb.currency_exchange_rate_mr_60d
 FROM
     window_base wb
     INNER JOIN market_base mb ON wb.timestamp = mb.timestamp
 WHERE
-    wb.total_step >= @MIN_STEP
-    AND wb.step_count < (wb.total_step -60);
+    ROUND(wb.total_step * @VAL_RATIO) > (@WINDOW + 2)
+    AND ret_60d IS NOT NULL;
 
-DROP TABLE IF EXISTS stock_return_target;
+DROP TABLE IF EXISTS model_target;
 
-CREATE TEMPORARY TABLE stock_return_target AS WITH base AS (
+CREATE TEMPORARY TABLE model_target AS WITH base AS (
     SELECT
         stock_profile,
         timestamp,
         -- suspension check
         (LEAD(volume, @HORIZON) OVER w) AS future_volume_5d,
-        -- future return target
-        (LEAD(close, @HORIZON) OVER w / close) - 1 AS future_return_5d
+        (LEAD(volume, @HORIZON) OVER w20) AS future_volume_20d,
+        (MIN(volume) OVER w20) AS min_future_volume_20d,
+        -- future target
+        (LEAD(close, @HORIZON) OVER w / close) - 1 AS future_return_5d,
+        STDDEV_SAMP(ret_1d) OVER w20 AS future_vol_20d,
+        (MIN(close) OVER w20 / close) - 1 AS future_drawdown_20d
     FROM
         stock_base WINDOW w AS (
             PARTITION BY stock_profile
             ORDER BY
                 timestamp
-        )
-)
-SELECT
-    *
-FROM
-    base
-WHERE
-    future_return_5d IS NOT NULL;
-
-DROP TABLE IF EXISTS stock_vol_target;
-
-CREATE TEMPORARY TABLE stock_vol_target AS WITH base AS (
-    SELECT
-        stock_profile,
-        timestamp,
-        -- suspension check
-        (MIN(volume) OVER w) AS min_future_volume_20d,
-        -- target
-        STDDEV_SAMP(ret_1d) OVER w AS future_vol_20d
-    FROM
-        stock_base WINDOW w AS (
+        ),
+        w20 AS (
             PARTITION BY stock_profile
             ORDER BY
                 timestamp ROWS BETWEEN 1 FOLLOWING
@@ -273,62 +257,14 @@ CREATE TEMPORARY TABLE stock_vol_target AS WITH base AS (
         )
 )
 SELECT
-    *
-FROM
-    base
-WHERE
-    future_vol_20d IS NOT NULL;
-
-DROP TABLE IF EXISTS stock_drawdown_target;
-
-CREATE TEMPORARY TABLE stock_drawdown_target AS WITH base AS (
-    SELECT
-        b.stock_profile,
-        b.timestamp,
-        MIN(f.close / b.close - 1) AS future_drawdown_20d
-    FROM
-        stock_base b
-        JOIN stock_data f ON f.stock_profile = b.stock_profile
-        AND f.timestamp > b.timestamp
-        AND f.timestamp <= DATE_ADD(b.timestamp, INTERVAL 20 DAY)
-    GROUP BY
-        b.stock_profile,
-        b.timestamp
-)
-SELECT
-    *
-FROM
-    base
-WHERE
-    future_drawdown_20d IS NOT NULL;
-
-DROP TABLE IF EXISTS stock_crash_target;
-
-CREATE TEMPORARY TABLE stock_crash_target AS WITH base AS (
-    SELECT
-        stock_profile,
-        timestamp,
-        -- suspension check
-        (LEAD(volume, @HORIZON) OVER w) AS future_volume_5d,
-        -- future return target
-        (LEAD(close, @HORIZON) OVER w / close) - 1 AS future_return_5d
-    FROM
-        stock_base WINDOW w AS (
-            PARTITION BY stock_profile
-            ORDER BY
-                timestamp
-        )
-)
-SELECT
     *,
     CASE
+        WHEN future_return_5d IS NULL THEN NULL
         WHEN future_return_5d < -0.08 THEN 1
         ELSE 0
     END AS crash
 FROM
-    base
-WHERE
-    future_return_5d IS NOT NULL;
+    base;
 
 DROP TABLE IF EXISTS stock_data_normalized;
 
@@ -343,33 +279,6 @@ CREATE TEMPORARY TABLE stock_data_normalized AS WITH base AS (
                 timestamp ROWS BETWEEN 60 PRECEDING
                 AND CURRENT ROW
         ) AS zero_volume_count,
-        -- stock features
-        (ret_1d - AVG(ret_1d) OVER w) / COALESCE(
-            NULLIF(STDDEV_SAMP(ret_1d) OVER w, 0),
-            0.00000001
-        ) AS ret_1d_n,
-        (ret_5d - AVG(ret_5d) OVER w) / COALESCE(
-            NULLIF(STDDEV_SAMP(ret_5d) OVER w, 0),
-            0.00000001
-        ) AS ret_5d_n,
-        (ret_20d - AVG(ret_20d) OVER w) / COALESCE(
-            NULLIF(STDDEV_SAMP(ret_20d) OVER w, 0),
-            0.00000001
-        ) AS ret_20d_n,
-        (gap - AVG(gap) OVER w) / COALESCE(NULLIF(STDDEV_SAMP(gap) OVER w, 0), 0.00000001) AS gap_n,
-        (intraday_range - AVG(intraday_range) OVER w) / COALESCE(
-            NULLIF(STDDEV_SAMP(intraday_range) OVER w, 0),
-            0.00000001
-        ) AS intraday_range_n,
-        close_position,
-        (vol_20 - AVG(vol_20) OVER w) / COALESCE(
-            NULLIF(STDDEV_SAMP(vol_20) OVER w, 0),
-            0.00000001
-        ) AS vol_20_n,
-        (drawdown - AVG(drawdown) OVER w) / COALESCE(
-            NULLIF(STDDEV_SAMP(drawdown) OVER w, 0),
-            0.00000001
-        ) AS drawdown_n,
         (turnover - AVG(turnover) OVER w) / COALESCE(
             NULLIF(STDDEV_SAMP(turnover) OVER w, 0),
             0.00000001
@@ -386,7 +295,49 @@ CREATE TEMPORARY TABLE stock_data_normalized AS WITH base AS (
             NULLIF(STDDEV_SAMP(spread_proxy) OVER w, 0),
             0.00000001
         ) AS spread_proxy_n,
-        -- Index features
+        (ret_1d - AVG(ret_1d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(ret_1d) OVER w, 0),
+            0.00000001
+        ) AS ret_1d_n,
+        (ret_5d - AVG(ret_5d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(ret_5d) OVER w, 0),
+            0.00000001
+        ) AS ret_5d_n,
+        (ret_20d - AVG(ret_20d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(ret_20d) OVER w, 0),
+            0.00000001
+        ) AS ret_20d_n,
+        (ret_60d - AVG(ret_60d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(ret_60d) OVER w, 0),
+            0.00000001
+        ) AS ret_60d_n,
+        (gap - AVG(gap) OVER w) / COALESCE(NULLIF(STDDEV_SAMP(gap) OVER w, 0), 0.00000001) AS gap_n,
+        (intraday_range - AVG(intraday_range) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(intraday_range) OVER w, 0),
+            0.00000001
+        ) AS intraday_range_n,
+        close_position,
+        (drawdown_20d - AVG(drawdown_20d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(drawdown_20d) OVER w, 0),
+            0.00000001
+        ) AS drawdown_20d_n,
+        (drawdown_60d - AVG(drawdown_60d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(drawdown_60d) OVER w, 0),
+            0.00000001
+        ) AS drawdown_60d_n,
+        (vol_20d - AVG(vol_20d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(vol_20d) OVER w, 0),
+            0.00000001
+        ) AS vol_20d_n,
+        (vol_60d - AVG(vol_60d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(vol_60d) OVER w, 0),
+            0.00000001
+        ) AS vol_60d_n,
+        idx_close_pos,
+        (idx_range - AVG(idx_range) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_range) OVER w, 0),
+            0.00000001
+        ) AS idx_range_n,
         (idx_ret_1d - AVG(idx_ret_1d) OVER w) / COALESCE(
             NULLIF(STDDEV_SAMP(idx_ret_1d) OVER w, 0),
             0.00000001
@@ -395,77 +346,102 @@ CREATE TEMPORARY TABLE stock_data_normalized AS WITH base AS (
             NULLIF(STDDEV_SAMP(idx_ret_5d) OVER w, 0),
             0.00000001
         ) AS idx_ret_5d_n,
-        (idx_close_pos - AVG(idx_close_pos) OVER w) / COALESCE(
-            NULLIF(STDDEV_SAMP(idx_close_pos) OVER w, 0),
+        (idx_ret_20d - AVG(idx_ret_20d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_ret_20d) OVER w, 0),
             0.00000001
-        ) AS idx_close_pos_n,
-        (idx_range - AVG(idx_range) OVER w) / COALESCE(
-            NULLIF(STDDEV_SAMP(idx_range) OVER w, 0),
+        ) AS idx_ret_20d_n,
+        (idx_ret_60d - AVG(idx_ret_60d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_ret_60d) OVER w, 0),
             0.00000001
-        ) AS idx_range_n,
-        (idx_vol_20 - AVG(idx_vol_20) OVER w) / COALESCE(
-            NULLIF(STDDEV_SAMP(idx_vol_20) OVER w, 0),
-            0.00000001
-        ) AS idx_vol_20_n,
-        (idx_value_z_n - AVG(idx_value_z_n) OVER w) / COALESCE(
-            NULLIF(STDDEV_SAMP(idx_value_z_n) OVER w, 0),
-            0.00000001
-        ) AS idx_value_z_n_n,
-        -- Currency Exchange Rate features
+        ) AS idx_ret_60d_n,
         (
-            currency_exchange_rate_daily_return - AVG(currency_exchange_rate_daily_return) OVER w
+            currency_exchange_rate_ret_1d - AVG(currency_exchange_rate_ret_1d) OVER w
         ) / COALESCE(
             NULLIF(
-                STDDEV_SAMP(currency_exchange_rate_daily_return) OVER w,
+                STDDEV_SAMP(currency_exchange_rate_ret_1d) OVER w,
                 0
             ),
             0.00000001
-        ) AS currency_exchange_rate_daily_return_n,
+        ) AS currency_exchange_rate_ret_1d_n,
         (
-            currency_exchange_rate_log_return - AVG(currency_exchange_rate_log_return) OVER w
+            currency_exchange_rate_ret_5d - AVG(currency_exchange_rate_ret_5d) OVER w
         ) / COALESCE(
             NULLIF(
-                STDDEV_SAMP(currency_exchange_rate_log_return) OVER w,
+                STDDEV_SAMP(currency_exchange_rate_ret_5d) OVER w,
                 0
             ),
             0.00000001
-        ) AS currency_exchange_rate_log_return_n,
+        ) AS currency_exchange_rate_ret_5d_n,
         (
-            currency_exchange_rate_ma_7 - AVG(currency_exchange_rate_ma_7) OVER w
+            currency_exchange_rate_ret_20d - AVG(currency_exchange_rate_ret_20d) OVER w
         ) / COALESCE(
             NULLIF(
-                STDDEV_SAMP(currency_exchange_rate_ma_7) OVER w,
+                STDDEV_SAMP(currency_exchange_rate_ret_20d) OVER w,
                 0
             ),
             0.00000001
-        ) AS currency_exchange_rate_ma_7_n,
+        ) AS currency_exchange_rate_ret_20d_n,
         (
-            currency_exchange_rate_ma_30 - AVG(currency_exchange_rate_ma_30) OVER w
+            currency_exchange_rate_ret_60d - AVG(currency_exchange_rate_ret_60d) OVER w
         ) / COALESCE(
             NULLIF(
-                STDDEV_SAMP(currency_exchange_rate_ma_30) OVER w,
+                STDDEV_SAMP(currency_exchange_rate_ret_60d) OVER w,
                 0
             ),
             0.00000001
-        ) AS currency_exchange_rate_ma_30_n,
+        ) AS currency_exchange_rate_ret_60d_n,
+        (idx_vol_20d - AVG(idx_vol_20d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_vol_20d) OVER w, 0),
+            0.00000001
+        ) AS idx_vol_20d_n,
+        (idx_vol_60d - AVG(idx_vol_60d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_vol_60d) OVER w, 0),
+            0.00000001
+        ) AS idx_vol_60d_n,
+        (idx_drawdown_20d - AVG(idx_drawdown_20d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_drawdown_20d) OVER w, 0),
+            0.00000001
+        ) AS idx_drawdown_20d_n,
+        (idx_drawdown_60d - AVG(idx_drawdown_60d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(idx_drawdown_60d) OVER w, 0),
+            0.00000001
+        ) AS idx_drawdown_60d_n,
         (
-            currency_exchange_rate_volatility_7 - AVG(currency_exchange_rate_volatility_7) OVER w
+            currency_exchange_rate_vol_20d - AVG(currency_exchange_rate_vol_20d) OVER w
         ) / COALESCE(
             NULLIF(
-                STDDEV_SAMP(currency_exchange_rate_volatility_7) OVER w,
+                STDDEV_SAMP(currency_exchange_rate_vol_20d) OVER w,
                 0
             ),
             0.00000001
-        ) AS currency_exchange_rate_volatility_7_n,
+        ) AS currency_exchange_rate_vol_20d_n,
         (
-            currency_exchange_rate_dist_from_ma30 - AVG(currency_exchange_rate_dist_from_ma30) OVER w
+            currency_exchange_rate_vol_60d - AVG(currency_exchange_rate_vol_60d) OVER w
         ) / COALESCE(
             NULLIF(
-                STDDEV_SAMP(currency_exchange_rate_dist_from_ma30) OVER w,
+                STDDEV_SAMP(currency_exchange_rate_vol_60d) OVER w,
                 0
             ),
             0.00000001
-        ) AS currency_exchange_rate_dist_from_ma30_n,
+        ) AS currency_exchange_rate_vol_60d_n,
+        (
+            currency_exchange_rate_mr_20d - AVG(currency_exchange_rate_mr_20d) OVER w
+        ) / COALESCE(
+            NULLIF(
+                STDDEV_SAMP(currency_exchange_rate_mr_20d) OVER w,
+                0
+            ),
+            0.00000001
+        ) AS currency_exchange_rate_mr_20d_n,
+        (
+            currency_exchange_rate_mr_60d - AVG(currency_exchange_rate_mr_60d) OVER w
+        ) / COALESCE(
+            NULLIF(
+                STDDEV_SAMP(currency_exchange_rate_mr_60d) OVER w,
+                0
+            ),
+            0.00000001
+        ) AS currency_exchange_rate_mr_60d_n,
         -- time features
         dow_sin,
         dow_cos,
@@ -487,7 +463,48 @@ CREATE TEMPORARY TABLE stock_data_normalized AS WITH base AS (
         )
 )
 SELECT
-    *
+    stock_profile,
+    timestamp,
+    zero_volume_count,
+    turnover_n,
+    foreign_flow_n,
+    order_imbalance_n,
+    spread_proxy_n,
+    ret_1d_n,
+    ret_5d_n,
+    ret_20d_n,
+    ret_60d_n,
+    gap_n,
+    intraday_range_n,
+    close_position,
+    drawdown_20d_n,
+    drawdown_60d_n,
+    vol_20d_n,
+    vol_60d_n,
+    idx_close_pos,
+    idx_range_n,
+    idx_ret_1d_n,
+    idx_ret_5d_n,
+    idx_ret_20d_n,
+    idx_ret_60d_n,
+    currency_exchange_rate_ret_1d_n,
+    currency_exchange_rate_ret_5d_n,
+    currency_exchange_rate_ret_20d_n,
+    currency_exchange_rate_ret_60d_n,
+    idx_vol_20d_n,
+    idx_vol_60d_n,
+    idx_drawdown_20d_n,
+    idx_drawdown_60d_n,
+    currency_exchange_rate_vol_20d_n,
+    currency_exchange_rate_vol_60d_n,
+    currency_exchange_rate_mr_20d_n,
+    currency_exchange_rate_mr_60d_n,
+    dow_sin,
+    dow_cos,
+    woy_sin,
+    woy_cos,
+    month_sin,
+    month_cos
 FROM
     base
 WHERE
@@ -497,137 +514,85 @@ DROP TABLE IF EXISTS stock_return_normalized;
 
 CREATE TEMPORARY TABLE stock_return_normalized AS
 SELECT
-    sdn.stock_profile,
-    sdn.timestamp,
-    sdn.zero_volume_count,
-    sdn.ret_1d_n,
-    sdn.ret_5d_n,
-    sdn.ret_20d_n,
-    sdn.gap_n,
-    sdn.intraday_range_n,
-    sdn.close_position,
-    sdn.vol_20_n,
-    sdn.drawdown_n,
-    sdn.turnover_n,
-    sdn.foreign_flow_n,
-    sdn.order_imbalance_n,
-    sdn.spread_proxy_n,
-    sdn.idx_ret_1d_n,
-    sdn.idx_ret_5d_n,
-    sdn.idx_close_pos_n,
-    sdn.idx_range_n,
-    sdn.idx_vol_20_n,
-    sdn.idx_value_z_n_n,
-    sdn.currency_exchange_rate_daily_return_n,
-    sdn.currency_exchange_rate_log_return_n,
-    sdn.currency_exchange_rate_ma_7_n,
-    sdn.currency_exchange_rate_ma_30_n,
-    sdn.currency_exchange_rate_volatility_7_n,
-    sdn.currency_exchange_rate_dist_from_ma30_n,
-    sdn.dow_sin,
-    sdn.dow_cos,
-    sdn.woy_sin,
-    sdn.woy_cos,
-    sdn.month_sin,
-    sdn.month_cos,
-    -- Target
-    PERCENT_RANK() OVER (
-        PARTITION BY srt.timestamp
-        ORDER BY
-            srt.future_return_5d
-    ) AS future_return_5d,
-    srt.future_volume_5d,
+    sdn.*,
     ROW_NUMBER() OVER (
         PARTITION BY sdn.stock_profile
         ORDER BY
             sdn.timestamp DESC
     ) AS step_count,
-    COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step
+    COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
+    -- Target
+    PERCENT_RANK() OVER (
+        PARTITION BY mt.timestamp
+        ORDER BY
+            mt.future_return_5d
+    ) AS future_return_5d,
+    mt.future_volume_5d
 FROM
     stock_data_normalized sdn
-    INNER JOIN stock_return_target srt ON sdn.timestamp = srt.timestamp
-    AND sdn.stock_profile = srt.stock_profile;
+    INNER JOIN model_target mt ON sdn.timestamp = mt.timestamp
+    AND sdn.stock_profile = mt.stock_profile
+WHERE
+    mt.future_return_5d IS NOT NULL;
 
 DROP TABLE IF EXISTS stock_vol_normalized;
 
 CREATE TEMPORARY TABLE stock_vol_normalized AS
 SELECT
-    n.stock_profile,
-    n.timestamp,
-    n.zero_volume_count,
-    n.ret_1d_n,
-    n.ret_5d_n,
-    n.ret_20d_n,
-    n.vol_20_n,
-    n.drawdown_n,
-    n.turnover_n,
-    n.foreign_flow_n,
-    n.order_imbalance_n,
-    n.spread_proxy_n,
-    v.min_future_volume_20d,
-    v.future_vol_20d,
+    sdn.*,
     ROW_NUMBER() OVER (
-        PARTITION BY n.stock_profile
+        PARTITION BY sdn.stock_profile
         ORDER BY
-            n.timestamp DESC
+            sdn.timestamp DESC
     ) AS step_count,
-    COUNT(*) OVER (PARTITION BY n.stock_profile) as total_step
+    COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
+    mt.min_future_volume_20d,
+    mt.future_vol_20d
 FROM
-    stock_data_normalized n
-    JOIN stock_vol_target v ON n.stock_profile = v.stock_profile
-    AND n.timestamp = v.timestamp;
+    stock_data_normalized sdn
+    JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
+    AND sdn.timestamp = mt.timestamp
+WHERE
+    mt.future_vol_20d IS NOT NULL;
 
 DROP TABLE IF EXISTS stock_drawdown_normalized;
 
 CREATE TEMPORARY TABLE stock_drawdown_normalized AS
 SELECT
-    n.stock_profile,
-    n.timestamp,
-    n.ret_1d_n,
-    n.ret_5d_n,
-    n.vol_20_n,
-    n.drawdown_n,
-    n.turnover_n,
-    n.foreign_flow_n,
-    n.order_imbalance_n,
-    n.spread_proxy_n,
+    sdn.*,
     ROW_NUMBER() OVER (
-        PARTITION BY n.stock_profile
+        PARTITION BY sdn.stock_profile
         ORDER BY
-            n.timestamp DESC
+            sdn.timestamp DESC
     ) AS step_count,
-    COUNT(*) OVER (PARTITION BY n.stock_profile) as total_step,
-    d.future_drawdown_20d
+    COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
+    mt.future_drawdown_20d
 FROM
-    stock_data_normalized n
-    JOIN stock_drawdown_target d ON n.stock_profile = d.stock_profile
-    AND n.timestamp = d.timestamp;
+    stock_data_normalized sdn
+    JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
+    AND sdn.timestamp = mt.timestamp
+WHERE
+    mt.future_drawdown_20d IS NOT NULL;
 
 DROP TABLE IF EXISTS stock_crash_normalized;
 
 CREATE TEMPORARY TABLE stock_crash_normalized AS
 SELECT
-    n.stock_profile,
-    n.timestamp,
-    -- USE RAW (NOT SEQUENCE) FEATURES
-    n.vol_20,
-    n.drawdown,
-    n.turnover,
-    n.foreign_flow,
-    n.order_imbalance,
-    n.spread_proxy,
-    c.future_volume_5d,
-    c.crash,
+    sdn.*,
     ROW_NUMBER() OVER (
-        PARTITION BY n.stock_profile
+        PARTITION BY sdn.stock_profile
         ORDER BY
-            n.timestamp DESC
+            sdn.timestamp DESC
     ) AS step_count,
-    COUNT(*) OVER (PARTITION BY n.stock_profile) as total_step
+    COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
+    mt.future_volume_5d,
+    mt.crash
 FROM
-    stock_base n
-    JOIN stock_crash_target c ON n.stock_profile = c.stock_profile
-    AND n.timestamp = c.timestamp;
+    stock_data_normalized sdn
+    JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
+    AND sdn.timestamp = mt.timestamp
+WHERE
+    mt.crash IS NOT NULL;
 
 DROP TABLE IF EXISTS stock_return_train;
 
@@ -655,20 +620,7 @@ DROP TABLE IF EXISTS stock_vol_val;
 
 CREATE TABLE stock_vol_train AS
 SELECT
-    stock_profile,
-    timestamp,
-    zero_volume_count,
-    ret_1d_n,
-    ret_5d_n,
-    ret_20d_n,
-    vol_20_n,
-    drawdown_n,
-    turnover_n,
-    foreign_flow_n,
-    order_imbalance_n,
-    spread_proxy_n,
-    min_future_volume_20d,
-    future_vol_20d
+    *
 FROM
     stock_vol_normalized
 WHERE
@@ -676,20 +628,7 @@ WHERE
 
 CREATE TABLE stock_vol_val AS
 SELECT
-    stock_profile,
-    timestamp,
-    zero_volume_count,
-    ret_1d_n,
-    ret_5d_n,
-    ret_20d_n,
-    vol_20_n,
-    drawdown_n,
-    turnover_n,
-    foreign_flow_n,
-    order_imbalance_n,
-    spread_proxy_n,
-    min_future_volume_20d,
-    future_vol_20d
+    *
 FROM
     stock_vol_normalized
 WHERE
@@ -701,17 +640,7 @@ DROP TABLE IF EXISTS stock_drawdown_val;
 
 CREATE TABLE stock_drawdown_train AS
 SELECT
-    stock_profile,
-    timestamp,
-    ret_1d_n,
-    ret_5d_n,
-    vol_20_n,
-    drawdown_n,
-    turnover_n,
-    foreign_flow_n,
-    order_imbalance_n,
-    spread_proxy_n,
-    future_drawdown_20d
+    *
 FROM
     stock_drawdown_normalized
 WHERE
@@ -719,17 +648,7 @@ WHERE
 
 CREATE TABLE stock_drawdown_val AS
 SELECT
-    stock_profile,
-    timestamp,
-    ret_1d_n,
-    ret_5d_n,
-    vol_20_n,
-    drawdown_n,
-    turnover_n,
-    foreign_flow_n,
-    order_imbalance_n,
-    spread_proxy_n,
-    future_drawdown_20d
+    *
 FROM
     stock_drawdown_normalized
 WHERE
@@ -741,16 +660,7 @@ DROP TABLE IF EXISTS stock_crash_val;
 
 CREATE TABLE stock_crash_train AS
 SELECT
-    stock_profile,
-    timestamp,
-    vol_20,
-    drawdown,
-    turnover,
-    foreign_flow,
-    order_imbalance,
-    spread_proxy,
-    future_volume_5d,
-    crash
+    *
 FROM
     stock_crash_normalized
 WHERE
@@ -758,16 +668,7 @@ WHERE
 
 CREATE TABLE stock_crash_val AS
 SELECT
-    stock_profile,
-    timestamp,
-    vol_20,
-    drawdown,
-    turnover,
-    foreign_flow,
-    order_imbalance,
-    spread_proxy,
-    future_volume_5d,
-    crash
+    *
 FROM
     stock_crash_normalized
 WHERE

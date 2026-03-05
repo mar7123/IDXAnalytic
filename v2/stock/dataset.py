@@ -1,4 +1,4 @@
-from stock.config import CURRENCY_EXCHANGE_RATE_FEATURE_COLS, DD_FEATURES, INDEX_FEATURE_COLS, RETURN_FEATURE_COLS, VOL_FEATURES, WINDOW
+from stock.config import CURRENCY_EXCHANGE_RATE_FEATURE_COLS, INDEX_FEATURE_COLS, STOCK_FEATURE_COLS, WINDOW
 import numpy as np
 import pandas as pd
 
@@ -9,7 +9,8 @@ def make_return_sequences(df: pd.DataFrame, stock_profile_mapper: dict[str, int]
     for stock_profile, g in df.groupby("stock_profile"):
         stock_id = stock_profile_mapper[stock_profile]
         g = g.sort_values("timestamp")
-        values = g[RETURN_FEATURE_COLS + INDEX_FEATURE_COLS + CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
+        values = g[STOCK_FEATURE_COLS + INDEX_FEATURE_COLS +
+                   CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
         zero_volume_counts = g["zero_volume_count"].values
         targets = g["future_return_5d"].values
         future_vols = g["future_volume_5d"].values

@@ -164,9 +164,7 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
         CASE
             WHEN s.high != s.low THEN (s.close - s.low) / NULLIF(s.high - s.low, 0)
             ELSE 0.5
-        END AS close_position,
-        -- step counter
-        COUNT(*) OVER (PARTITION BY s.stock_profile) as total_step
+        END AS close_position
     FROM
         stock_data s WINDOW w20 AS (
             PARTITION BY stock_profile
@@ -226,30 +224,55 @@ FROM
     window_base wb
     INNER JOIN market_base mb ON wb.timestamp = mb.timestamp
 WHERE
-    ROUND(wb.total_step * @VAL_RATIO) > (@WINDOW + 2)
-    AND ret_60d IS NOT NULL;
+    ret_60d IS NOT NULL;
 
-DROP TABLE IF EXISTS model_target;
+DROP TABLE IF EXISTS model_target_5d;
 
-CREATE TEMPORARY TABLE model_target AS WITH base AS (
+CREATE TEMPORARY TABLE model_target_5d AS WITH base AS (
     SELECT
         stock_profile,
         timestamp,
+        -- step counter
+        COUNT(*) OVER (PARTITION BY stock_profile) as total_step,
         -- suspension check
-        (LEAD(volume, @HORIZON) OVER w) AS future_volume_5d,
-        (LEAD(volume, @HORIZON) OVER w20) AS future_volume_20d,
-        (MIN(volume) OVER w20) AS min_future_volume_20d,
+        (LEAD(volume, @HORIZON) OVER w5) AS future_volume_5d,
         -- future target
-        (LEAD(close, @HORIZON) OVER w / close) - 1 AS future_return_5d,
-        STDDEV_SAMP(ret_1d) OVER w20 AS future_vol_20d,
-        (MIN(close) OVER w20 / close) - 1 AS future_drawdown_20d
+        (LEAD(close, @HORIZON) OVER w5 / close) - 1 AS future_return_5d
     FROM
-        stock_base WINDOW w AS (
+        stock_base WINDOW w5 AS (
             PARTITION BY stock_profile
             ORDER BY
                 timestamp
-        ),
-        w20 AS (
+        )
+)
+SELECT
+    *,
+    CASE
+        WHEN future_return_5d < -0.08 THEN 1
+        ELSE 0
+    END AS crash
+FROM
+    base
+WHERE
+    future_return_5d IS NOT NULL
+    AND ROUND(total_step * @VAL_RATIO) > (@WINDOW + @HORIZON + 1);
+
+DROP TABLE IF EXISTS model_target_20d;
+
+CREATE TEMPORARY TABLE model_target_20d AS WITH base AS (
+    SELECT
+        stock_profile,
+        timestamp,
+        -- step counter
+        COUNT(*) OVER (PARTITION BY stock_profile) as total_step,
+        -- suspension check
+        (LEAD(volume, 20) OVER w20) AS future_volume_20d,
+        (MIN(volume) OVER w20) AS min_future_volume_20d,
+        -- future target
+        STDDEV_SAMP(ret_1d) OVER w20 AS future_vol_20d,
+        (MIN(close) OVER w20 / close) - 1 AS future_drawdown_20d
+    FROM
+        stock_base WINDOW w20 AS (
             PARTITION BY stock_profile
             ORDER BY
                 timestamp ROWS BETWEEN 1 FOLLOWING
@@ -257,14 +280,12 @@ CREATE TEMPORARY TABLE model_target AS WITH base AS (
         )
 )
 SELECT
-    *,
-    CASE
-        WHEN future_return_5d IS NULL THEN NULL
-        WHEN future_return_5d < -0.08 THEN 1
-        ELSE 0
-    END AS crash
+    *
 FROM
-    base;
+    base
+WHERE
+    future_volume_20d IS NOT NULL
+    AND ROUND(total_step * @VAL_RATIO) > (@WINDOW + 20 + 1);
 
 DROP TABLE IF EXISTS stock_data_normalized;
 
@@ -521,19 +542,18 @@ SELECT
             sdn.timestamp DESC
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
+    -- Suspension Check
+    mt5.future_volume_5d,
     -- Target
     PERCENT_RANK() OVER (
-        PARTITION BY mt.timestamp
+        PARTITION BY mt5.timestamp
         ORDER BY
-            mt.future_return_5d
-    ) AS future_return_5d,
-    mt.future_volume_5d
+            mt5.future_return_5d
+    ) AS future_return_5d
 FROM
     stock_data_normalized sdn
-    INNER JOIN model_target mt ON sdn.timestamp = mt.timestamp
-    AND sdn.stock_profile = mt.stock_profile
-WHERE
-    mt.future_return_5d IS NOT NULL;
+    INNER JOIN model_target_5d mt5 ON sdn.timestamp = mt5.timestamp
+    AND sdn.stock_profile = mt5.stock_profile;
 
 DROP TABLE IF EXISTS stock_vol_normalized;
 
@@ -546,14 +566,18 @@ SELECT
             sdn.timestamp DESC
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
-    mt.min_future_volume_20d,
-    mt.future_vol_20d
+    -- Suspension Check
+    mt20.min_future_volume_20d,
+    -- Target
+    PERCENT_RANK() OVER (
+        PARTITION BY mt20.timestamp
+        ORDER BY
+            mt20.future_vol_20d
+    ) AS future_vol_20d
 FROM
     stock_data_normalized sdn
-    JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
-    AND sdn.timestamp = mt.timestamp
-WHERE
-    mt.future_vol_20d IS NOT NULL;
+    JOIN model_target_20d mt20 ON sdn.stock_profile = mt20.stock_profile
+    AND sdn.timestamp = mt20.timestamp;
 
 DROP TABLE IF EXISTS stock_drawdown_normalized;
 
@@ -566,13 +590,18 @@ SELECT
             sdn.timestamp DESC
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
-    mt.future_drawdown_20d
+    -- Suspension Check
+    mt20.min_future_volume_20d,
+    -- Target
+    PERCENT_RANK() OVER (
+        PARTITION BY mt20.timestamp
+        ORDER BY
+            mt20.future_drawdown_20d
+    ) AS future_drawdown_20d
 FROM
     stock_data_normalized sdn
-    JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
-    AND sdn.timestamp = mt.timestamp
-WHERE
-    mt.future_drawdown_20d IS NOT NULL;
+    JOIN model_target_20d mt20 ON sdn.stock_profile = mt20.stock_profile
+    AND sdn.timestamp = mt20.timestamp;
 
 DROP TABLE IF EXISTS stock_crash_normalized;
 
@@ -584,15 +613,15 @@ SELECT
         ORDER BY
             sdn.timestamp DESC
     ) AS step_count,
-    COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
-    mt.future_volume_5d,
-    mt.crash
+    COUNT(*) OVER (PARTITION BY sdn.stock_profile) AS total_step,
+    -- Suspension Check
+    mt5.future_volume_5d,
+    -- Target
+    mt5.crash
 FROM
     stock_data_normalized sdn
-    JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
-    AND sdn.timestamp = mt.timestamp
-WHERE
-    mt.crash IS NOT NULL;
+    JOIN model_target_5d mt5 ON sdn.stock_profile = mt5.stock_profile
+    AND sdn.timestamp = mt5.timestamp;
 
 DROP TABLE IF EXISTS stock_return_train;
 
@@ -673,3 +702,23 @@ FROM
     stock_crash_normalized
 WHERE
     step_count <= ROUND(total_step * @VAL_RATIO, 0);
+
+DROP TABLE IF EXISTS stock_inference;
+
+CREATE TABLE stock_inference AS WITH base AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY stock_profile
+            ORDER BY
+                timestamp DESC
+        ) AS step_count
+    FROM
+        stock_data_normalized
+)
+SELECT
+    *
+FROM
+    base
+WHERE
+    step_count <= @WINDOW;

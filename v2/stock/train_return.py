@@ -1,7 +1,7 @@
 from keras.models import Model
-from keras.layers import Input, Dense, Dropout, LayerNormalization, Embedding, Flatten, Concatenate, RepeatVector
+from keras.layers import Input, Dense, Dropout, LayerNormalization, Embedding, Flatten, Concatenate
 from keras.optimizers import Adam
-from keras.losses import BinaryCrossentropy
+from keras.losses import MeanSquaredError
 from keras.metrics import MeanAbsoluteError
 import pandas as pd
 from sqlalchemy import Engine
@@ -33,16 +33,9 @@ def load_return_test(db_engine: Engine) -> pd.DataFrame:
     return df
 
 
-def build_return_model(engine: Engine):
+def build_return_model(engine: Engine, stock_profile_mapper: dict[str, int]):
     train_df = load_return_training(engine)
     val_df = load_return_test(engine)
-    stock_profile_set: set[str] = set()
-    for stock_profile in train_df["stock_profile"].values:
-        stock_profile_set.add(stock_profile)
-    for stock_profile in val_df["stock_profile"].values:
-        stock_profile_set.add(stock_profile)
-    stock_profile_mapper = {label: i for i,
-                            label in enumerate(sorted(stock_profile_set))}
 
     X_train, X_train_id, y_train = make_return_sequences(
         train_df, stock_profile_mapper)
@@ -77,10 +70,11 @@ def build_return_model(engine: Engine):
     model = Model(inputs=[ts_input, stock_id_input], outputs=output)
 
     model.compile(
-        optimizer=Adam(learning_rate=1e-6),
-        loss=BinaryCrossentropy(),
+        optimizer=Adam(learning_rate=1e-5),
+        loss=MeanSquaredError(),
         metrics=[MeanAbsoluteError()]
     )
+    print("TRAIN RETURN --------------------")
     model.fit(
         x={
             "ts_input": X_train,
@@ -103,5 +97,5 @@ def build_return_model(engine: Engine):
         ],
         verbose=2,
     )
-    # preds = model.predict([X_val, X_val_id])
+
     return model

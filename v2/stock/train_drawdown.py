@@ -1,5 +1,6 @@
-from keras.models import Sequential
 from keras.layers import Input, LSTM, Dense, Dropout, LayerNormalization, Embedding, Flatten, Concatenate, RepeatVector
+from keras.metrics import MeanAbsoluteError
+from keras.losses import MeanSquaredError
 from keras.models import Model
 from keras.optimizers import Adam
 import numpy as np
@@ -33,23 +34,9 @@ def load_drawdown_test(db_engine: Engine) -> pd.DataFrame:
     return df
 
 
-def quantile_loss(q):
-    def loss(y_true, y_pred):
-        e = y_true - y_pred
-        return tf.reduce_mean(tf.maximum(q * e, (q - 1) * e))
-    return loss
-
-
-def build_drawdown_model(engine: Engine, q: float = 0.95):
+def build_drawdown_model(engine: Engine, stock_profile_mapper: dict[str, int]):
     train_df = load_drawdown_training(engine)
     val_df = load_drawdown_test(engine)
-    stock_profile_set: set[str] = set()
-    for stock_profile in train_df["stock_profile"].values:
-        stock_profile_set.add(stock_profile)
-    for stock_profile in val_df["stock_profile"].values:
-        stock_profile_set.add(stock_profile)
-    stock_profile_mapper = {label: i for i,
-                            label in enumerate(sorted(stock_profile_set))}
 
     X_train, X_train_id, y_train = make_drawdown_sequences(
         train_df, stock_profile_mapper)
@@ -59,7 +46,8 @@ def build_drawdown_model(engine: Engine, q: float = 0.95):
     ts_input = Input(shape=(WINDOW, X_train.shape[-1]), name="ts_input")
 
     stock_id_input = Input(shape=(1,), name="stock_id_input")
-    emb = Embedding(input_dim=len(stock_profile_mapper), output_dim=16)(stock_id_input)
+    emb = Embedding(input_dim=len(stock_profile_mapper),
+                    output_dim=16)(stock_id_input)
     emb = Flatten()(emb)
     emb_seq = RepeatVector(WINDOW)(emb)
 
@@ -77,13 +65,15 @@ def build_drawdown_model(engine: Engine, q: float = 0.95):
     x = Dropout(0.1)(x)
 
     z = Dense(16, activation="relu")(x)
-    output = Dense(1, activation="linear")(z)
+    output = Dense(1, activation="sigmoid")(z)
 
     model = Model(inputs=[ts_input, stock_id_input], outputs=output)
 
+    print("TRAIN DRAWDOWN --------------------")
     model.compile(
-        optimizer=Adam(learning_rate=1e-4),
-        loss=quantile_loss(q)
+        optimizer=Adam(learning_rate=1e-5),
+        loss=MeanSquaredError(),
+        metrics=[MeanAbsoluteError()],
     )
 
     model.fit(
@@ -98,25 +88,15 @@ def build_drawdown_model(engine: Engine, q: float = 0.95):
         }, y_val),
         epochs=150,
         batch_size=256,
-        shuffle=True,
         callbacks=[
             EarlyStopping(
                 monitor='val_loss',
-                patience=10,
+                patience=15,
                 restore_best_weights=True
             ),
-            ReduceLROnPlateau(patience=5, verbose=1,),
+            ReduceLROnPlateau(patience=10, verbose=1,),
         ],
+        verbose=2,
     )
 
-    pred = model.predict({
-        "ts_input": X_val,
-        "stock_id_input": X_val_id
-    })
-    coverage_check = y_val <= pred.flatten()
-
-    coverage_ratio = np.mean(coverage_check)
-
-    print(f"Empirical Coverage: {coverage_ratio:.4f}")
-    print(f"Target Coverage: 0.95")
     return model

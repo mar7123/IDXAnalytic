@@ -50,3 +50,4 @@ STOCK_FEATURE_COLS = [
 WINDOW = 60
 PREP_SQL = "v2/stock/db/prep.sql"
 CLEAN_SQL = "v2/stock/db/clean.sql"
+OUTPUT_PATH = "output.xlsx"

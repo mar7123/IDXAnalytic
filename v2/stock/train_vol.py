@@ -1,7 +1,7 @@
-from keras.models import Sequential
-from keras.layers import LSTM, Dense, Dropout, LayerNormalization
+from keras.models import Model
+from keras.layers import LSTM, Dense, Dropout, LayerNormalization, Input, Embedding, Flatten, Concatenate
 from keras.optimizers import Adam
-from keras.losses import Huber
+from keras.losses import MeanSquaredError
 from keras.metrics import MeanAbsoluteError
 import pandas as pd
 from sqlalchemy import Engine
@@ -32,46 +32,69 @@ def load_vol_test(db_engine: Engine) -> pd.DataFrame:
     return df
 
 
-def build_vol_model(engine: Engine):
-    X_train, y_train = make_vol_sequences(load_vol_training(engine))
-    X_val, y_val = make_vol_sequences(load_vol_test(engine))
+def build_vol_model(engine: Engine, stock_profile_mapper: dict[str, int]):
+    train_df = load_vol_training(engine)
+    val_df = load_vol_test(engine)
 
-    model = Sequential([
-        LSTM(
-            64,
-            return_sequences=True,
-        ),
-        LayerNormalization(),
-        Dropout(0.3),
+    X_train, X_train_id, y_train = make_vol_sequences(
+        train_df, stock_profile_mapper)
+    X_val, X_val_id, y_val = make_vol_sequences(
+        val_df, stock_profile_mapper)
 
-        LSTM(32),
-        LayerNormalization(),
-        Dropout(0.2),
+    ts_input = Input(shape=(WINDOW, X_train.shape[-1]), name="ts_input")
+    stock_id_input = Input(shape=(1,), name="stock_id_input")
 
-        Dense(16, activation="relu"),
-        Dropout(0.2),
+    emb = Embedding(input_dim=len(stock_profile_mapper),
+                    output_dim=18)(stock_id_input)
+    emb_flat = Flatten()(emb)
 
-        Dense(1, activation="linear")
-    ])
+    x = LSTM(
+        64,
+        return_sequences=True,
+    )(ts_input)
+    x = LayerNormalization()(x)
+    x = Dropout(0.1)(x)
+
+    x = LSTM(
+        32,
+    )(ts_input)
+    x = LayerNormalization()(x)
+    x = Dropout(0.1)(x)
+
+    merged = Concatenate()([x, emb_flat])
+
+    x = Dense(16, activation="relu")(merged)
+    x = Dropout(0.1)(x)
+
+    output = Dense(1, activation="sigmoid")(x)
+
+    model = Model(inputs=[ts_input, stock_id_input], outputs=output)
 
     model.compile(
-        optimizer=Adam(learning_rate=1e-3),
-        loss=Huber(delta=1),
+        optimizer=Adam(learning_rate=1e-5),
+        loss=MeanSquaredError(),
         metrics=[MeanAbsoluteError()]
     )
+    print("TRAIN VOL --------------------")
     model.fit(
-        X_train, y_train,
-        validation_data=(X_val, y_val),
+        x={
+            "ts_input": X_train,
+            "stock_id_input": X_train_id
+        },
+        y=y_train,
+        validation_data=({
+            "ts_input": X_val,
+            "stock_id_input": X_val_id
+        }, y_val),
         epochs=150,
         batch_size=256,
-        shuffle=True,
         callbacks=[
             EarlyStopping(
                 monitor='val_loss',
-                patience=10,
+                patience=15,
                 restore_best_weights=True
             ),
-            ReduceLROnPlateau(patience=5, verbose=1,),
+            ReduceLROnPlateau(patience=10, verbose=1,),
         ],
         verbose=2,
     )

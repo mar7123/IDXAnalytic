@@ -1,9 +1,9 @@
 from sqlalchemy import Engine
 from xgboost import XGBClassifier
+from xgboost.callback import EarlyStopping
 import pandas as pd
-from sklearn.calibration import CalibratedClassifierCV
 
-from stock.config import CRASH_FEATURES
+from stock.config import CURRENCY_EXCHANGE_RATE_FEATURE_COLS, INDEX_FEATURE_COLS, STOCK_FEATURE_COLS
 
 
 def load_crash_training(db_engine: Engine) -> pd.DataFrame:
@@ -30,17 +30,22 @@ def load_crash_test(db_engine: Engine) -> pd.DataFrame:
 
 def build_crash_model(engine: Engine):
     train_df = load_crash_training(engine)
+    train_df.dropna(inplace=True)
     val_df = load_crash_test(engine)
-    X_train = train_df[CRASH_FEATURES].values
+    val_df.dropna(inplace=True)
+    X_train = train_df[STOCK_FEATURE_COLS + INDEX_FEATURE_COLS +
+                       CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
     y_train = train_df["crash"].values
 
-    X_val = val_df[CRASH_FEATURES].values
+    X_val = val_df[STOCK_FEATURE_COLS + INDEX_FEATURE_COLS +
+                   CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
     y_val = val_df["crash"].values
 
     scale_pos_weight = (y_train == 0).sum() / max((y_train == 1).sum(), 1)
 
+    print("TRAIN CRASH --------------------")
     model = XGBClassifier(
-        n_estimators=500,
+        n_estimators=5000,
         max_depth=4,
         learning_rate=0.03,
         subsample=0.8,
@@ -52,6 +57,16 @@ def build_crash_model(engine: Engine):
         objective="binary:logistic",
         eval_metric="logloss",
         scale_pos_weight=scale_pos_weight,
+        callbacks=[
+            EarlyStopping(
+                rounds=100,
+                min_delta=1e-3,
+                save_best=True,
+                maximize=False,
+                data_name="validation_0",
+                metric_name="logloss",
+            )
+        ],
         random_state=42
     )
 
@@ -60,12 +75,5 @@ def build_crash_model(engine: Engine):
         eval_set=[(X_val, y_val)],
         verbose=True
     )
-    calibrated_model = CalibratedClassifierCV(
-        estimator=model,
-        method="isotonic",
-        ensemble=False
-    )
-
-    calibrated_model.fit(X_val, y_val)
 
     return model

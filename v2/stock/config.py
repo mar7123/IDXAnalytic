@@ -1,3 +1,6 @@
+from sqlalchemy import Engine
+
+
 INDEX_FEATURE_COLS = [
     "idx_close_pos",
     "idx_range_n",
@@ -51,3 +54,14 @@ WINDOW = 60
 PREP_SQL = "v2/stock/db/prep.sql"
 CLEAN_SQL = "v2/stock/db/clean.sql"
 OUTPUT_PATH = "output.xlsx"
+
+
+class ConfigManager:
+    def __init__(self):
+        self.stock_profile_mapper = dict[int, str]()
+        self.return_delta = 1.0
+        self.vol_delta = 1.0
+        self.drawdown_delta = 1.0
+
+
+config_manager = ConfigManager()

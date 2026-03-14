@@ -26,6 +26,20 @@ WHERE
             )
     );
 
+SELECT
+    @MIN_DATE := MIN(timestamp)
+FROM
+    (
+        SELECT
+            DISTINCT timestamp
+        FROM
+            stock_data
+        ORDER BY
+            timestamp DESC
+        LIMIT
+            500
+    ) t;
+
 DROP TABLE IF EXISTS market_base;
 
 CREATE TEMPORARY TABLE market_base AS WITH index_base AS (
@@ -42,6 +56,7 @@ CREATE TEMPORARY TABLE market_base AS WITH index_base AS (
         index_data
     WHERE
         index_profile = "COMPOSITE"
+        AND timestamp >= @MIN_DATE
 ),
 currency_exchange_base AS (
     SELECT
@@ -130,21 +145,21 @@ DROP TABLE IF EXISTS stock_base;
 
 CREATE TEMPORARY TABLE stock_base AS WITH base as (
     SELECT
-        s.stock_profile,
-        s.timestamp,
-        s.close,
+        stock_profile,
+        timestamp,
+        close,
         -- suspension check
-        s.volume,
+        volume,
         -- derived features
-        s.volume / NULLIF(s.tradeble_shares, 0) AS turnover,
-        (s.foreign_buy - s.foreign_sell) / NULLIF(s.volume, 0) AS foreign_flow,
-        (s.bid_volume - s.offer_volume) / NULLIF(s.bid_volume + s.offer_volume, 0) AS order_imbalance,
-        (s.offer - s.bid) / NULLIF(close, 0) AS spread_proxy,
+        volume / NULLIF(tradeble_shares, 0) AS turnover,
+        (foreign_buy - foreign_sell) / NULLIF(volume, 0) AS foreign_flow,
+        (bid_volume - offer_volume) / NULLIF(bid_volume + offer_volume, 0) AS order_imbalance,
+        (offer - bid) / NULLIF(close, 0) AS spread_proxy,
         -- returns
-        (s.close - s.previous) / NULLIF(s.previous, 0) AS ret_1d,
-        (s.close / LAG(s.close, 5) OVER w20) - 1 AS ret_5d,
-        (s.close / LAG(s.close, 20) OVER w20) - 1 AS ret_20d,
-        (s.close / LAG(s.close, 20) OVER w60) - 1 AS ret_60d,
+        (close - previous) / NULLIF(previous, 0) AS ret_1d,
+        (close / LAG(close, 5) OVER w20) - 1 AS ret_5d,
+        (close / LAG(close, 20) OVER w20) - 1 AS ret_20d,
+        (close / LAG(close, 20) OVER w60) - 1 AS ret_60d,
         -- time data
         SIN(2 * PI() * DAYOFWEEK(timestamp) / 7) AS dow_sin,
         COS(2 * PI() * DAYOFWEEK(timestamp) / 7) AS dow_cos,
@@ -155,18 +170,20 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
         -- price action
         (
             CASE
-                WHEN s.open_price = 0
-                AND s.previous != 0 THEN s.previous
-                ELSE s.open_price
-            END - s.previous
-        ) / NULLIF(s.previous, 0) AS gap,
-        (s.high - s.low) / NULLIF(s.previous, 0) AS intraday_range,
+                WHEN open_price = 0
+                AND previous != 0 THEN previous
+                ELSE open_price
+            END - previous
+        ) / NULLIF(previous, 0) AS gap,
+        (high - low) / NULLIF(previous, 0) AS intraday_range,
         CASE
-            WHEN s.high != s.low THEN (s.close - s.low) / NULLIF(s.high - s.low, 0)
+            WHEN high != low THEN (close - low) / NULLIF(high - low, 0)
             ELSE 0.5
         END AS close_position
     FROM
-        stock_data s WINDOW w20 AS (
+        stock_data
+    WHERE
+        timestamp >= @MIN_DATE WINDOW w20 AS (
             PARTITION BY stock_profile
             ORDER BY
                 timestamp ROWS BETWEEN 19 PRECEDING
@@ -545,15 +562,19 @@ SELECT
     -- Suspension Check
     mt5.future_volume_5d,
     -- Target
-    PERCENT_RANK() OVER (
-        PARTITION BY mt5.timestamp
-        ORDER BY
-            mt5.future_return_5d
+    (
+        mt5.future_return_5d - AVG(mt5.future_return_5d) OVER wt
+    ) / COALESCE(
+        NULLIF(
+            STDDEV(mt5.future_return_5d) OVER wt,
+            0
+        ),
+        0.00000001
     ) AS future_return_5d
 FROM
     stock_data_normalized sdn
     INNER JOIN model_target_5d mt5 ON sdn.timestamp = mt5.timestamp
-    AND sdn.stock_profile = mt5.stock_profile;
+    AND sdn.stock_profile = mt5.stock_profile WINDOW wt AS (PARTITION BY mt5.timestamp);
 
 DROP TABLE IF EXISTS stock_vol_normalized;
 
@@ -569,15 +590,19 @@ SELECT
     -- Suspension Check
     mt20.min_future_volume_20d,
     -- Target
-    PERCENT_RANK() OVER (
-        PARTITION BY mt20.timestamp
-        ORDER BY
-            mt20.future_vol_20d
+    (
+        mt20.future_vol_20d - AVG(mt20.future_vol_20d) OVER wt
+    ) / COALESCE(
+        NULLIF(
+            STDDEV(mt20.future_vol_20d) OVER wt,
+            0
+        ),
+        0.00000001
     ) AS future_vol_20d
 FROM
     stock_data_normalized sdn
     JOIN model_target_20d mt20 ON sdn.stock_profile = mt20.stock_profile
-    AND sdn.timestamp = mt20.timestamp;
+    AND sdn.timestamp = mt20.timestamp WINDOW wt AS (PARTITION BY mt20.timestamp);
 
 DROP TABLE IF EXISTS stock_drawdown_normalized;
 
@@ -593,15 +618,19 @@ SELECT
     -- Suspension Check
     mt20.min_future_volume_20d,
     -- Target
-    PERCENT_RANK() OVER (
-        PARTITION BY mt20.timestamp
-        ORDER BY
-            mt20.future_drawdown_20d
+    (
+        mt20.future_drawdown_20d - AVG(mt20.future_drawdown_20d) OVER wt
+    ) / COALESCE(
+        NULLIF(
+            STDDEV(mt20.future_drawdown_20d) OVER wt,
+            0
+        ),
+        0.00000001
     ) AS future_drawdown_20d
 FROM
     stock_data_normalized sdn
     JOIN model_target_20d mt20 ON sdn.stock_profile = mt20.stock_profile
-    AND sdn.timestamp = mt20.timestamp;
+    AND sdn.timestamp = mt20.timestamp WINDOW wt AS (PARTITION BY mt20.timestamp);
 
 DROP TABLE IF EXISTS stock_crash_normalized;
 

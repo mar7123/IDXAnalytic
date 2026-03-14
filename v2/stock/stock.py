@@ -1,12 +1,17 @@
+from datetime import datetime
+
 import pandas as pd
 from sqlalchemy import Engine, text
+import tensorflow as tf
+import random
+import numpy as np
 from stock.config import CLEAN_SQL, PREP_SQL
 from stock.train_return import build_return_model
 from stock.train_vol import build_vol_model
 from stock.train_drawdown import build_drawdown_model
 from stock.train_crash import build_crash_model
 from stock.dataset import make_inference_sequences
-from config import OUTPUT_PATH
+from stock.config import OUTPUT_PATH, config_manager
 
 
 def prep_data(db_engine: Engine):
@@ -45,61 +50,68 @@ def clean_data(db_engine: Engine):
 
 
 def stock_main(engine: Engine):
+    start_time = datetime.now()
     prep_data(engine)
     inference_df = load_inference(engine)
     stock_profile_set: set[str] = set()
     for stock_profile in inference_df["stock_profile"].values:
         stock_profile_set.add(stock_profile)
-    stock_profile_mapper = {label: i for i,
-                            label in enumerate(sorted(stock_profile_set))}
+    config_manager.stock_profile_mapper = {label: i for i,
+                                           label in enumerate(sorted(stock_profile_set))}
     stock_profile_mapper_reversed = {
-        v: k for k, v in stock_profile_mapper.items()}
+        v: k for k, v in config_manager.stock_profile_mapper.items()}
+    X_infer, X_infer_id = make_inference_sequences(inference_df)
+    result_df = pd.DataFrame()
+    for i in range(7):
+        rand = random.randint(1, 1000)
+        random.seed(rand)
+        tf.random.set_seed(rand)
+        np.random.seed(rand)
+        return_model = build_return_model(engine=engine)
+        vol_model = build_vol_model(engine=engine)
+        drawdown_model = build_drawdown_model(engine=engine)
+        # crash_model = build_crash_model(engine=engine)
 
-    X_infer, X_infer_id = make_inference_sequences(
-        inference_df, stock_profile_mapper)
-
-    return_model = build_return_model(
-        engine=engine, stock_profile_mapper=stock_profile_mapper)
-    vol_model = build_vol_model(
-        engine=engine, stock_profile_mapper=stock_profile_mapper)
-    drawdown_model = build_drawdown_model(
-        engine=engine, stock_profile_mapper=stock_profile_mapper)
-    # crash_model = build_crash_model(engine=engine)
-
-    return_pred = return_model.predict(
-        x={
-            "ts_input": X_infer,
-            "stock_id_input": X_infer_id
-        },
-        verbose=1,
-    )
-    vol_pred = vol_model.predict(
-        x={
-            "ts_input": X_infer,
-            "stock_id_input": X_infer_id
-        },
-        verbose=1,
-    )
-    drawdown_pred = drawdown_model.predict(
-        x={
-            "ts_input": X_infer,
-            "stock_id_input": X_infer_id
-        },
-        verbose=1,
-    )
-    result_df = pd.DataFrame({
-        "stock_id": X_infer_id.flatten(),
-        "return_pred": return_pred.flatten(),
-        "vol_pred": vol_pred.flatten(),
-        "drawdown_pred": drawdown_pred.flatten(),
-    })
-    result_df["stock_profile"] = result_df["stock_id"].map(
-        stock_profile_mapper_reversed)
-    result_df["result_score"] = (
-        result_df["return_pred"] / result_df["vol_pred"])/result_df["drawdown_pred"]
+        return_pred = return_model.predict(
+            x={
+                "ts_input": X_infer,
+                "stock_id_input": X_infer_id
+            },
+            verbose=1,
+        )
+        vol_pred = vol_model.predict(
+            x={
+                "ts_input": X_infer,
+                "stock_id_input": X_infer_id
+            },
+            verbose=1,
+        )
+        drawdown_pred = drawdown_model.predict(
+            x={
+                "ts_input": X_infer,
+                "stock_id_input": X_infer_id
+            },
+            verbose=1,
+        )
+        temp_df = pd.DataFrame({
+            "stock_id": X_infer_id.flatten(),
+            "return_pred": return_pred.flatten(),
+            "vol_pred": vol_pred.flatten(),
+            "drawdown_pred": drawdown_pred.flatten(),
+        })
+        temp_df["stock_profile"] = temp_df["stock_id"].map(
+            stock_profile_mapper_reversed)
+        temp_df["result_score"] = (
+            temp_df["return_pred"] + (-1 * temp_df["vol_pred"]) + (-1 * temp_df["drawdown_pred"]))/3
+        if i == 0:
+            result_df["stock_profile"] = temp_df["stock_profile"]
+        result_df[f"result_score{i}"] = temp_df["result_score"]
 
     with pd.ExcelWriter(OUTPUT_PATH, engine="openpyxl") as writer:
         result_df.to_excel(
             writer, sheet_name="result_df", index=False)
 
     clean_data(engine)
+    end_time = datetime.now()
+    duration = end_time-start_time
+    print(duration)

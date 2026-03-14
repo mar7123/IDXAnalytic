@@ -1,10 +1,11 @@
-from stock.config import CURRENCY_EXCHANGE_RATE_FEATURE_COLS, INDEX_FEATURE_COLS, STOCK_FEATURE_COLS, WINDOW
+from stock.config import CURRENCY_EXCHANGE_RATE_FEATURE_COLS, INDEX_FEATURE_COLS, STOCK_FEATURE_COLS, WINDOW, config_manager
 import numpy as np
 import pandas as pd
 
 
-def make_return_sequences(df: pd.DataFrame, stock_profile_mapper: dict[str, int]):
+def make_return_sequences(df: pd.DataFrame):
     X, X_id, y = [], [], []
+    stock_profile_mapper = config_manager.stock_profile_mapper
 
     for stock_profile, g in df.groupby("stock_profile"):
         stock_id = stock_profile_mapper[stock_profile]
@@ -27,8 +28,9 @@ def make_return_sequences(df: pd.DataFrame, stock_profile_mapper: dict[str, int]
     return np.array(X), np.array(X_id), np.array(y)
 
 
-def make_vol_sequences(df: pd.DataFrame, stock_profile_mapper: dict[str, int]):
+def make_vol_sequences(df: pd.DataFrame):
     X, X_id, y = [], [], []
+    stock_profile_mapper = config_manager.stock_profile_mapper
 
     for stock_profile, g in df.groupby("stock_profile"):
         stock_id = stock_profile_mapper[stock_profile]
@@ -51,9 +53,9 @@ def make_vol_sequences(df: pd.DataFrame, stock_profile_mapper: dict[str, int]):
     return np.array(X), np.array(X_id), np.array(y)
 
 
-def make_drawdown_sequences(df: pd.DataFrame, stock_profile_mapper: dict[str, int]):
+def make_drawdown_sequences(df: pd.DataFrame):
     X, X_id, y = [], [], []
-
+    stock_profile_mapper = config_manager.stock_profile_mapper
     for stock_profile, g in df.groupby("stock_profile"):
         stock_id = stock_profile_mapper[stock_profile]
         g.sort_values("timestamp", inplace=True)
@@ -75,9 +77,9 @@ def make_drawdown_sequences(df: pd.DataFrame, stock_profile_mapper: dict[str, in
     return np.array(X), np.array(X_id), np.array(y)
 
 
-def make_inference_sequences(df: pd.DataFrame, stock_profile_mapper: dict[str, int]):
+def make_inference_sequences(df: pd.DataFrame):
     X, X_id = [], []
-
+    stock_profile_mapper = config_manager.stock_profile_mapper
     for stock_profile, g in df.groupby("stock_profile"):
         stock_id = stock_profile_mapper[stock_profile]
         g.sort_values("timestamp", inplace=True)

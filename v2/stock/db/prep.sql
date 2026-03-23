@@ -236,7 +236,11 @@ SELECT
     mb.currency_exchange_rate_vol_20d,
     mb.currency_exchange_rate_vol_60d,
     mb.currency_exchange_rate_mr_20d,
-    mb.currency_exchange_rate_mr_60d
+    mb.currency_exchange_rate_mr_60d,
+    (wb.ret_1d - mb.idx_ret_1d) AS relative_ret_1d,
+    (wb.ret_5d - mb.idx_ret_5d) AS relative_ret_5d,
+    (wb.ret_20d - mb.idx_ret_20d) AS relative_ret_20d,
+    (wb.ret_60d - mb.idx_ret_60d) AS relative_ret_60d
 FROM
     window_base wb
     INNER JOIN market_base mb ON wb.timestamp = mb.timestamp
@@ -480,6 +484,42 @@ CREATE TEMPORARY TABLE stock_data_normalized AS WITH base AS (
             ),
             0.00000001
         ) AS currency_exchange_rate_mr_60d_n,
+        (
+            relative_ret_1d - AVG(relative_ret_1d) OVER w
+        ) / COALESCE(
+            NULLIF(
+                STDDEV_SAMP(relative_ret_1d) OVER w,
+                0
+            ),
+            0.00000001
+        ) AS relative_ret_1d_n,
+        (
+            relative_ret_5d - AVG(relative_ret_5d) OVER w
+        ) / COALESCE(
+            NULLIF(
+                STDDEV_SAMP(relative_ret_5d) OVER w,
+                0
+            ),
+            0.00000001
+        ) AS relative_ret_5d_n,
+        (
+            relative_ret_20d - AVG(relative_ret_20d) OVER w
+        ) / COALESCE(
+            NULLIF(
+                STDDEV_SAMP(relative_ret_20d) OVER w,
+                0
+            ),
+            0.00000001
+        ) AS relative_ret_20d_n,
+        (
+            relative_ret_60d - AVG(relative_ret_60d) OVER w
+        ) / COALESCE(
+            NULLIF(
+                STDDEV_SAMP(relative_ret_60d) OVER w,
+                0
+            ),
+            0.00000001
+        ) AS relative_ret_60d_n,
         -- time features
         dow_sin,
         dow_cos,
@@ -537,6 +577,10 @@ SELECT
     currency_exchange_rate_vol_60d_n,
     currency_exchange_rate_mr_20d_n,
     currency_exchange_rate_mr_60d_n,
+    relative_ret_1d_n,
+    relative_ret_5d_n,
+    relative_ret_20d_n,
+    relative_ret_60d_n,
     dow_sin,
     dow_cos,
     woy_sin,

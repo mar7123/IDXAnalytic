@@ -77,8 +77,22 @@ def make_drawdown_sequences(df: pd.DataFrame):
     return np.array(X), np.array(X_id), np.array(y)
 
 
+def make_crash_sequences(df: pd.DataFrame, features: list[str]):
+    X,  y = [], []
+    df.drop(df[df["future_volume_5d"] == 0].index, inplace=True)
+    df.drop(df[df["zero_volume_count"] > 0].index, inplace=True)
+    X = df[features].values
+    y = df["crash"].values
+    return np.array(X), np.array(y)
+
+
 def make_inference_sequences(df: pd.DataFrame):
     X, X_id = [], []
+    features = STOCK_FEATURE_COLS + INDEX_FEATURE_COLS + \
+        CURRENCY_EXCHANGE_RATE_FEATURE_COLS
+    latest_ts = df['timestamp'].max()
+    latest_df = df[df['timestamp'] == latest_ts]
+    X_latest = latest_df[features].values
     stock_profile_mapper = config_manager.stock_profile_mapper
     for stock_profile, g in df.groupby("stock_profile"):
         stock_id = stock_profile_mapper[stock_profile]
@@ -86,8 +100,7 @@ def make_inference_sequences(df: pd.DataFrame):
         if len(g) < WINDOW:
             continue
 
-        values = g[STOCK_FEATURE_COLS + INDEX_FEATURE_COLS +
-                   CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
+        values = g[features].values
 
         zero_volume_counts = g["zero_volume_count"].values[-WINDOW:]
 
@@ -97,4 +110,4 @@ def make_inference_sequences(df: pd.DataFrame):
         X.append(values[-WINDOW:])
         X_id.append(stock_id)
 
-    return np.array(X), np.array(X_id)
+    return np.array(X), np.array(X_id), np.array(X_latest)

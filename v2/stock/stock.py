@@ -60,7 +60,7 @@ def stock_main(engine: Engine):
                                            label in enumerate(sorted(stock_profile_set))}
     stock_profile_mapper_reversed = {
         v: k for k, v in config_manager.stock_profile_mapper.items()}
-    X_infer, X_infer_id = make_inference_sequences(inference_df)
+    X_infer, X_infer_id, X_crash = make_inference_sequences(inference_df)
     result_df = pd.DataFrame()
     for i in range(7):
         rand = random.randint(1, 1000)
@@ -70,7 +70,7 @@ def stock_main(engine: Engine):
         return_model = build_return_model(engine=engine)
         vol_model = build_vol_model(engine=engine)
         drawdown_model = build_drawdown_model(engine=engine)
-        # crash_model = build_crash_model(engine=engine)
+        crash_model = build_crash_model(engine=engine, rand=rand)
 
         return_pred = return_model.predict(
             x={
@@ -93,6 +93,10 @@ def stock_main(engine: Engine):
             },
             verbose=1,
         )
+        crash_pred = crash_model.predict_proba(
+            X_crash,
+        )
+        crash_prob = pd.DataFrame(crash_pred, columns=["0_prob", "1_prob"])
         temp_df = pd.DataFrame({
             "stock_id": X_infer_id.flatten(),
             "return_pred": return_pred.flatten(),
@@ -106,6 +110,7 @@ def stock_main(engine: Engine):
         if i == 0:
             result_df["stock_profile"] = temp_df["stock_profile"]
         result_df[f"result_score{i}"] = temp_df["result_score"]
+        result_df[f"crash_prob{i}"] = crash_prob["1_prob"]
 
     with pd.ExcelWriter(OUTPUT_PATH, engine="openpyxl") as writer:
         result_df.to_excel(

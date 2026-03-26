@@ -1,5 +1,5 @@
 from datetime import datetime
-
+import os
 import pandas as pd
 from sqlalchemy import Engine, text
 import tensorflow as tf
@@ -62,7 +62,8 @@ def stock_main(engine: Engine):
         v: k for k, v in config_manager.stock_profile_mapper.items()}
     X_infer, X_infer_id, X_crash = make_inference_sequences(inference_df)
     result_df = pd.DataFrame()
-    for i in range(7):
+    num_train = 2
+    for i in range(num_train):
         rand = random.randint(1, 1000)
         random.seed(rand)
         tf.random.set_seed(rand)
@@ -106,11 +107,16 @@ def stock_main(engine: Engine):
         temp_df["stock_profile"] = temp_df["stock_id"].map(
             stock_profile_mapper_reversed)
         temp_df["result_score"] = (
-            temp_df["return_pred"] + (-1 * temp_df["vol_pred"]) + (-1 * temp_df["drawdown_pred"]))/3
+            temp_df["return_pred"] + (-0.5 * temp_df["vol_pred"]) + (-0.5 * temp_df["drawdown_pred"]))/3
         if i == 0:
             result_df["stock_profile"] = temp_df["stock_profile"]
         result_df[f"result_score{i}"] = temp_df["result_score"]
         result_df[f"crash_prob{i}"] = crash_prob["1_prob"]
+
+    result_df["score"] = result_df[[
+        f'result_score{i}' for i in range(num_train)]].mean(axis=1)
+    result_df["crash"] = result_df[[
+        f'crash_prob{i}' for i in range(num_train)]].mean(axis=1)
 
     with pd.ExcelWriter(OUTPUT_PATH, engine="openpyxl") as writer:
         result_df.to_excel(

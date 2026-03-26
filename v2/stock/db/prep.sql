@@ -2,7 +2,7 @@ SET
     @WINDOW := 60;
 
 SET
-    @HORIZON := 5;
+    @HORIZON := 3;
 
 SET
     @VAL_RATIO := 0.2;
@@ -82,23 +82,25 @@ base AS (
         -- Index features
         idx_close_pos,
         (highest - lowest) / LAG(idx_value, 1) OVER w20 AS idx_range,
-        (idx_value / LAG(idx_value, 1) OVER w20) - 1 AS idx_ret_1d,
-        (idx_value / LAG(idx_value, 5) OVER w20) - 1 AS idx_ret_5d,
-        (idx_value / LAG(idx_value, 20) OVER w20) - 1 AS idx_ret_20d,
-        (idx_value / LAG(idx_value, 60) OVER w60) - 1 AS idx_ret_60d,
+        LN(idx_value / LAG(idx_value, 1) OVER w20) AS idx_ret_1d,
+        LN(idx_value / LAG(idx_value, 5) OVER w20) AS idx_ret_5d,
+        LN(idx_value / LAG(idx_value, 20) OVER w20) AS idx_ret_20d,
+        LN(idx_value / LAG(idx_value, 60) OVER w60) AS idx_ret_60d,
+        (idx_value / MAX(idx_value) OVER w20) - 1 AS idx_drawdown_20d,
+        (idx_value / MAX(idx_value) OVER w60) - 1 AS idx_drawdown_60d,
         -- Currency features
-        (
+        LN(
             currency_exchange_rate / LAG(currency_exchange_rate, 1) OVER w20
-        ) - 1 AS currency_exchange_rate_ret_1d,
-        (
+        ) AS currency_exchange_rate_ret_1d,
+        LN(
             currency_exchange_rate / LAG(currency_exchange_rate, 5) OVER w20
-        ) - 1 AS currency_exchange_rate_ret_5d,
-        (
+        ) AS currency_exchange_rate_ret_5d,
+        LN(
             currency_exchange_rate / LAG(currency_exchange_rate, 20) OVER w20
-        ) - 1 AS currency_exchange_rate_ret_20d,
-        (
+        ) AS currency_exchange_rate_ret_20d,
+        LN(
             currency_exchange_rate / LAG(currency_exchange_rate, 60) OVER w60
-        ) - 1 AS currency_exchange_rate_ret_60d
+        ) AS currency_exchange_rate_ret_60d
     FROM
         merged_timestamp_base WINDOW w20 AS (
             ORDER BY
@@ -114,12 +116,14 @@ base AS (
 window_base AS (
     SELECT
         *,
-        STDDEV_SAMP(idx_ret_1d) OVER w20 AS idx_vol_20d,
-        STDDEV_SAMP(idx_ret_1d) OVER w60 AS idx_vol_60d,
-        (idx_ret_1d / MAX(idx_ret_1d) OVER w20) - 1 AS idx_drawdown_20d,
-        (idx_ret_1d / MAX(idx_ret_1d) OVER w60) - 1 AS idx_drawdown_60d,
-        STDDEV_SAMP(currency_exchange_rate_ret_1d) OVER w20 AS currency_exchange_rate_vol_20d,
-        STDDEV_SAMP(currency_exchange_rate_ret_1d) OVER w60 AS currency_exchange_rate_vol_60d,
+        LN(STDDEV_SAMP(idx_ret_1d) OVER w20) AS idx_vol_20d,
+        LN(STDDEV_SAMP(idx_ret_1d) OVER w60) AS idx_vol_60d,
+        LN(
+            STDDEV_SAMP(currency_exchange_rate_ret_1d) OVER w20
+        ) AS currency_exchange_rate_vol_20d,
+        LN(
+            STDDEV_SAMP(currency_exchange_rate_ret_1d) OVER w60
+        ) AS currency_exchange_rate_vol_60d,
         currency_exchange_rate_ret_1d - AVG(currency_exchange_rate_ret_1d) OVER w20 AS currency_exchange_rate_mr_20d,
         currency_exchange_rate_ret_1d - AVG(currency_exchange_rate_ret_1d) OVER w60 AS currency_exchange_rate_mr_60d
     FROM
@@ -151,15 +155,15 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
         -- suspension check
         volume,
         -- derived features
-        volume / NULLIF(tradeble_shares, 0) AS turnover,
+        LN(1 + (volume / NULLIF(tradeble_shares, 0))) AS turnover,
         (foreign_buy - foreign_sell) / NULLIF(volume, 0) AS foreign_flow,
         (bid_volume - offer_volume) / NULLIF(bid_volume + offer_volume, 0) AS order_imbalance,
         (offer - bid) / NULLIF(close, 0) AS spread_proxy,
         -- returns
-        (close - previous) / NULLIF(previous, 0) AS ret_1d,
-        (close / LAG(close, 5) OVER w20) - 1 AS ret_5d,
-        (close / LAG(close, 20) OVER w20) - 1 AS ret_20d,
-        (close / LAG(close, 20) OVER w60) - 1 AS ret_60d,
+        LN((close / LAG(close, 1) OVER w20)) AS ret_1d,
+        LN((close / LAG(close, 5) OVER w20)) AS ret_5d,
+        LN((close / LAG(close, 20) OVER w20)) AS ret_20d,
+        LN((close / LAG(close, 20) OVER w60)) AS ret_60d,
         -- time data
         SIN(2 * PI() * DAYOFWEEK(timestamp) / 7) AS dow_sin,
         COS(2 * PI() * DAYOFWEEK(timestamp) / 7) AS dow_cos,
@@ -201,8 +205,8 @@ window_base AS (
         *,
         (close / MAX(close) OVER w20) - 1 AS drawdown_20d,
         (close / MAX(close) OVER w60) - 1 AS drawdown_60d,
-        STDDEV_SAMP(ret_1d) OVER w20 AS vol_20d,
-        STDDEV_SAMP(ret_1d) OVER w60 AS vol_60d
+        LN(STDDEV_SAMP(ret_1d) OVER w20 + 0.00000001) AS vol_20d,
+        LN(STDDEV_SAMP(ret_1d) OVER w60 + 0.00000001) AS vol_60d
     FROM
         base WINDOW w20 AS (
             PARTITION BY stock_profile
@@ -247,66 +251,45 @@ FROM
 WHERE
     ret_60d IS NOT NULL;
 
-DROP TABLE IF EXISTS model_target_5d;
+DROP TABLE IF EXISTS model_target;
 
-CREATE TEMPORARY TABLE model_target_5d AS WITH base AS (
+CREATE TEMPORARY TABLE model_target AS WITH base AS (
     SELECT
         stock_profile,
         timestamp,
         -- step counter
         COUNT(*) OVER (PARTITION BY stock_profile) as total_step,
         -- suspension check
-        (LEAD(volume, @HORIZON) OVER w5) AS future_volume_5d,
+        (LEAD(volume, @HORIZON) OVER w) AS future_volume,
+        MAX(
+            CASE
+                WHEN volume = 0 THEN 1
+                ELSE 0
+            END
+        ) OVER w AS zero_future_volume,
         -- future target
-        (LEAD(close, @HORIZON) OVER w5 / close) - 1 AS future_return_5d
+        LN(LEAD(close, @HORIZON) OVER w / close) AS future_return,
+        LN(STDDEV_SAMP(ret_1d) OVER w + 0.00000001) AS future_vol,
+        LN(MIN(close) OVER w / close) AS future_drawdown
     FROM
-        stock_base WINDOW w5 AS (
+        stock_base WINDOW w AS (
             PARTITION BY stock_profile
             ORDER BY
-                timestamp
+                timestamp ROWS BETWEEN 1 FOLLOWING
+                AND 3 FOLLOWING
         )
 )
 SELECT
     *,
     CASE
-        WHEN future_return_5d < -0.08 THEN 1
+        WHEN future_drawdown < LN(0.90) THEN 1
         ELSE 0
-    END AS crash
+    END AS future_crash
 FROM
     base
 WHERE
-    future_return_5d IS NOT NULL
+    future_return IS NOT NULL
     AND ROUND(total_step * @VAL_RATIO) > (@WINDOW + @HORIZON + 1);
-
-DROP TABLE IF EXISTS model_target_20d;
-
-CREATE TEMPORARY TABLE model_target_20d AS WITH base AS (
-    SELECT
-        stock_profile,
-        timestamp,
-        -- step counter
-        COUNT(*) OVER (PARTITION BY stock_profile) as total_step,
-        -- suspension check
-        (LEAD(volume, 20) OVER w20) AS future_volume_20d,
-        (MIN(volume) OVER w20) AS min_future_volume_20d,
-        -- future target
-        STDDEV_SAMP(ret_1d) OVER w20 AS future_vol_20d,
-        (MIN(close) OVER w20 / close) - 1 AS future_drawdown_20d
-    FROM
-        stock_base WINDOW w20 AS (
-            PARTITION BY stock_profile
-            ORDER BY
-                timestamp ROWS BETWEEN 1 FOLLOWING
-                AND 20 FOLLOWING
-        )
-)
-SELECT
-    *
-FROM
-    base
-WHERE
-    future_volume_20d IS NOT NULL
-    AND ROUND(total_step * @VAL_RATIO) > (@WINDOW + 20 + 1);
 
 DROP TABLE IF EXISTS stock_data_normalized;
 
@@ -604,21 +587,21 @@ SELECT
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
     -- Suspension Check
-    mt5.future_volume_5d,
+    mt.future_volume,
     -- Target
     (
-        mt5.future_return_5d - AVG(mt5.future_return_5d) OVER wt
+        mt.future_return - AVG(mt.future_return) OVER wt
     ) / COALESCE(
         NULLIF(
-            STDDEV(mt5.future_return_5d) OVER wt,
+            STDDEV(mt.future_return) OVER wt,
             0
         ),
         0.00000001
-    ) AS future_return_5d
+    ) AS future_return
 FROM
     stock_data_normalized sdn
-    INNER JOIN model_target_5d mt5 ON sdn.timestamp = mt5.timestamp
-    AND sdn.stock_profile = mt5.stock_profile WINDOW wt AS (PARTITION BY mt5.timestamp);
+    INNER JOIN model_target mt ON sdn.timestamp = mt.timestamp
+    AND sdn.stock_profile = mt.stock_profile WINDOW wt AS (PARTITION BY mt.timestamp);
 
 DROP TABLE IF EXISTS stock_vol_normalized;
 
@@ -632,21 +615,21 @@ SELECT
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
     -- Suspension Check
-    mt20.min_future_volume_20d,
+    mt.zero_future_volume,
     -- Target
     (
-        mt20.future_vol_20d - AVG(mt20.future_vol_20d) OVER wt
+        mt.future_vol - AVG(mt.future_vol) OVER wt
     ) / COALESCE(
         NULLIF(
-            STDDEV(mt20.future_vol_20d) OVER wt,
+            STDDEV(mt.future_vol) OVER wt,
             0
         ),
         0.00000001
-    ) AS future_vol_20d
+    ) AS future_vol
 FROM
     stock_data_normalized sdn
-    JOIN model_target_20d mt20 ON sdn.stock_profile = mt20.stock_profile
-    AND sdn.timestamp = mt20.timestamp WINDOW wt AS (PARTITION BY mt20.timestamp);
+    JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
+    AND sdn.timestamp = mt.timestamp WINDOW wt AS (PARTITION BY mt.timestamp);
 
 DROP TABLE IF EXISTS stock_drawdown_normalized;
 
@@ -660,21 +643,21 @@ SELECT
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
     -- Suspension Check
-    mt20.min_future_volume_20d,
+    mt.zero_future_volume,
     -- Target
     (
-        mt20.future_drawdown_20d - AVG(mt20.future_drawdown_20d) OVER wt
+        mt.future_drawdown - AVG(mt.future_drawdown) OVER wt
     ) / COALESCE(
         NULLIF(
-            STDDEV(mt20.future_drawdown_20d) OVER wt,
+            STDDEV(mt.future_drawdown) OVER wt,
             0
         ),
         0.00000001
-    ) AS future_drawdown_20d
+    ) AS future_drawdown
 FROM
     stock_data_normalized sdn
-    JOIN model_target_20d mt20 ON sdn.stock_profile = mt20.stock_profile
-    AND sdn.timestamp = mt20.timestamp WINDOW wt AS (PARTITION BY mt20.timestamp);
+    JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
+    AND sdn.timestamp = mt.timestamp WINDOW wt AS (PARTITION BY mt.timestamp);
 
 DROP TABLE IF EXISTS stock_crash_normalized;
 
@@ -688,13 +671,13 @@ SELECT
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) AS total_step,
     -- Suspension Check
-    mt5.future_volume_5d,
+    mt.future_volume,
     -- Target
-    mt5.crash
+    mt.future_crash
 FROM
     stock_data_normalized sdn
-    JOIN model_target_5d mt5 ON sdn.stock_profile = mt5.stock_profile
-    AND sdn.timestamp = mt5.timestamp;
+    JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
+    AND sdn.timestamp = mt.timestamp;
 
 DROP TABLE IF EXISTS stock_return_train;
 

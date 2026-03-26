@@ -13,8 +13,8 @@ def make_return_sequences(df: pd.DataFrame):
         values = g[STOCK_FEATURE_COLS + INDEX_FEATURE_COLS +
                    CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
         zero_volume_counts = g["zero_volume_count"].values
-        targets = g["future_return_5d"].values
-        future_vols = g["future_volume_5d"].values
+        targets = g["future_return"].values
+        future_vols = g["future_volume"].values
 
         for i in range(len(g) - WINDOW):
             zero_volume_count = zero_volume_counts[i:i+WINDOW]
@@ -38,13 +38,13 @@ def make_vol_sequences(df: pd.DataFrame):
         values = g[STOCK_FEATURE_COLS + INDEX_FEATURE_COLS +
                    CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
         zero_volume_counts = g["zero_volume_count"].values
-        targets = g["future_vol_20d"].values
-        future_vols = g["min_future_volume_20d"].values
+        targets = g["future_vol"].values
+        zero_future_volumes = g["zero_future_volume"].values
 
         for i in range(len(g) - WINDOW):
             zero_volume_count = zero_volume_counts[i:i+WINDOW]
-            future_vol = future_vols[i+WINDOW]
-            if future_vol == 0 or any(x > 0 for x in zero_volume_count):
+            zero_future_volume = zero_future_volumes[i+WINDOW]
+            if zero_future_volume == 1 or any(x > 0 for x in zero_volume_count):
                 continue
             X.append(values[i:i+WINDOW])
             X_id.append(stock_id)
@@ -62,13 +62,13 @@ def make_drawdown_sequences(df: pd.DataFrame):
         values = g[STOCK_FEATURE_COLS + INDEX_FEATURE_COLS +
                    CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
         zero_volume_counts = g["zero_volume_count"].values
-        future_vols = g["min_future_volume_20d"].values
-        targets = g["future_drawdown_20d"].values
+        zero_future_volumes = g["zero_future_volume"].values
+        targets = g["future_drawdown"].values
 
         for i in range(len(g) - WINDOW):
             zero_volume_count = zero_volume_counts[i:i+WINDOW]
-            future_vol = future_vols[i+WINDOW]
-            if future_vol == 0 or any(x > 0 for x in zero_volume_count):
+            zero_future_volume = zero_future_volumes[i+WINDOW]
+            if zero_future_volume == 1 or any(x > 0 for x in zero_volume_count):
                 continue
             X.append(values[i:i+WINDOW])
             X_id.append(stock_id)
@@ -79,10 +79,10 @@ def make_drawdown_sequences(df: pd.DataFrame):
 
 def make_crash_sequences(df: pd.DataFrame, features: list[str]):
     X,  y = [], []
-    df.drop(df[df["future_volume_5d"] == 0].index, inplace=True)
+    df.drop(df[df["future_volume"] == 0].index, inplace=True)
     df.drop(df[df["zero_volume_count"] > 0].index, inplace=True)
     X = df[features].values
-    y = df["crash"].values
+    y = df["future_crash"].values
     return np.array(X), np.array(y)
 
 

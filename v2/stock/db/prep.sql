@@ -282,9 +282,10 @@ CREATE TEMPORARY TABLE model_target AS WITH base AS (
 SELECT
     *,
     CASE
-        WHEN future_drawdown < LN(0.90) THEN 1
+        WHEN future_return < LN(0.90) THEN 1
+        WHEN future_return > LN(1.10) THEN 2
         ELSE 0
-    END AS future_crash
+    END AS future_regime
 FROM
     base
 WHERE
@@ -659,9 +660,9 @@ FROM
     JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
     AND sdn.timestamp = mt.timestamp WINDOW wt AS (PARTITION BY mt.timestamp);
 
-DROP TABLE IF EXISTS stock_crash_normalized;
+DROP TABLE IF EXISTS stock_regime_normalized;
 
-CREATE TEMPORARY TABLE stock_crash_normalized AS
+CREATE TEMPORARY TABLE stock_regime_normalized AS
 SELECT
     sdn.*,
     ROW_NUMBER() OVER (
@@ -673,7 +674,7 @@ SELECT
     -- Suspension Check
     mt.future_volume,
     -- Target
-    mt.future_crash
+    mt.future_regime
 FROM
     stock_data_normalized sdn
     JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
@@ -739,23 +740,23 @@ FROM
 WHERE
     step_count <= ROUND(total_step * @VAL_RATIO, 0);
 
-DROP TABLE IF EXISTS stock_crash_train;
+DROP TABLE IF EXISTS stock_regime_train;
 
-DROP TABLE IF EXISTS stock_crash_val;
+DROP TABLE IF EXISTS stock_regime_val;
 
-CREATE TABLE stock_crash_train AS
+CREATE TABLE stock_regime_train AS
 SELECT
     *
 FROM
-    stock_crash_normalized
+    stock_regime_normalized
 WHERE
     step_count > ROUND(total_step * @VAL_RATIO, 0);
 
-CREATE TABLE stock_crash_val AS
+CREATE TABLE stock_regime_val AS
 SELECT
     *
 FROM
-    stock_crash_normalized
+    stock_regime_normalized
 WHERE
     step_count <= ROUND(total_step * @VAL_RATIO, 0);
 

@@ -77,12 +77,12 @@ def make_drawdown_sequences(df: pd.DataFrame):
     return np.array(X), np.array(X_id), np.array(y)
 
 
-def make_crash_sequences(df: pd.DataFrame, features: list[str]):
+def make_regime_sequences(df: pd.DataFrame, features: list[str]):
     X,  y = [], []
     df.drop(df[df["future_volume"] == 0].index, inplace=True)
     df.drop(df[df["zero_volume_count"] > 0].index, inplace=True)
     X = df[features].values
-    y = df["future_crash"].values
+    y = df["future_regime"].values
     return np.array(X), np.array(y)
 
 

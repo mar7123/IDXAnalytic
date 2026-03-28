@@ -2,7 +2,7 @@ SET
     @WINDOW := 60;
 
 SET
-    @HORIZON := 3;
+    @HORIZON := 5;
 
 SET
     @VAL_RATIO := 0.2;
@@ -269,6 +269,7 @@ CREATE TEMPORARY TABLE model_target AS WITH base AS (
         ) OVER w AS zero_future_volume,
         -- future target
         LN(LEAD(close, @HORIZON) OVER w / close) AS future_return,
+        LN(LEAD(close, ROUND(@HORIZON / 2)) OVER w / close) AS future_ret_regime,
         LN(STDDEV_SAMP(ret_1d) OVER w + 0.00000001) AS future_vol,
         LN(MIN(close) OVER w / close) AS future_drawdown
     FROM
@@ -276,14 +277,14 @@ CREATE TEMPORARY TABLE model_target AS WITH base AS (
             PARTITION BY stock_profile
             ORDER BY
                 timestamp ROWS BETWEEN 1 FOLLOWING
-                AND 3 FOLLOWING
+                AND 5 FOLLOWING
         )
 )
 SELECT
     *,
     CASE
-        WHEN future_return < LN(0.90) THEN 1
-        WHEN future_return > LN(1.10) THEN 2
+        WHEN future_ret_regime < LN(0.90) THEN 1
+        WHEN future_ret_regime > LN(1.10) THEN 2
         ELSE 0
     END AS future_regime
 FROM

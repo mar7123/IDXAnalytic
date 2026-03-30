@@ -5,6 +5,9 @@ SET
     @HORIZON := 5;
 
 SET
+    @REGIME_HORIZON := CAST(ROUND(@HORIZON / 2) AS UNSIGNED);
+
+SET
     @VAL_RATIO := 0.2;
 
 DELETE FROM
@@ -163,7 +166,7 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
         LN((close / LAG(close, 1) OVER w20)) AS ret_1d,
         LN((close / LAG(close, 5) OVER w20)) AS ret_5d,
         LN((close / LAG(close, 20) OVER w20)) AS ret_20d,
-        LN((close / LAG(close, 20) OVER w60)) AS ret_60d,
+        LN((close / LAG(close, 60) OVER w60)) AS ret_60d,
         -- time data
         SIN(2 * PI() * DAYOFWEEK(timestamp) / 7) AS dow_sin,
         COS(2 * PI() * DAYOFWEEK(timestamp) / 7) AS dow_cos,
@@ -269,7 +272,7 @@ CREATE TEMPORARY TABLE model_target AS WITH base AS (
         ) OVER w AS zero_future_volume,
         -- future target
         LN(LEAD(close, @HORIZON) OVER w / close) AS future_return,
-        LN(LEAD(close, ROUND(@HORIZON / 2)) OVER w / close) AS future_ret_regime,
+        LN(LEAD(close, @REGIME_HORIZON) OVER w / close) AS future_ret_regime,
         LN(STDDEV_SAMP(ret_1d) OVER w + 0.00000001) AS future_vol,
         LN(MIN(close) OVER w / close) AS future_drawdown
     FROM

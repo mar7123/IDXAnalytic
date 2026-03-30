@@ -63,6 +63,7 @@ def stock_main(engine: Engine):
     X_infer, X_infer_id, X_regime = make_inference_sequences(inference_df)
     result_df = pd.DataFrame()
     num_train = 7
+    prob_lis = ["0_prob", "1_prob", "2_prob"]
     for i in range(num_train):
         rand = random.randint(1, 1000)
         random.seed(rand)
@@ -97,7 +98,7 @@ def stock_main(engine: Engine):
         regime_pred = regime_model.predict_proba(
             X_regime,
         )
-        regime_prob = pd.DataFrame(regime_pred, columns=["0_prob", "1_prob", "2_prob"])
+        regime_prob = pd.DataFrame(regime_pred, columns=prob_lis)
         temp_df = pd.DataFrame({
             "stock_id": X_infer_id.flatten(),
             "return_pred": return_pred.flatten(),
@@ -111,12 +112,14 @@ def stock_main(engine: Engine):
         if i == 0:
             result_df["stock_profile"] = temp_df["stock_profile"]
         result_df[f"result_score{i}"] = temp_df["result_score"]
-        result_df[f"regime_prob{i}"] = regime_prob["2_prob"] - regime_prob["1_prob"]
+        for prob in prob_lis:
+            result_df[f"{prob}_{i}"] = regime_prob[prob]
 
     result_df["score"] = result_df[[
         f'result_score{i}' for i in range(num_train)]].mean(axis=1)
-    result_df["regime"] = result_df[[
-        f'regime_prob{i}' for i in range(num_train)]].mean(axis=1)
+    for prob in prob_lis:
+        result_df[f"regime_{prob}"] = result_df[[
+            f'{prob}_{i}' for i in range(num_train)]].mean(axis=1)
 
     with pd.ExcelWriter(OUTPUT_PATH, engine="openpyxl") as writer:
         result_df.to_excel(

@@ -62,8 +62,7 @@ def stock_main(engine: Engine):
         v: k for k, v in config_manager.stock_profile_mapper.items()}
     X_infer, X_infer_id, X_regime = make_inference_sequences(inference_df)
     result_df = pd.DataFrame()
-    num_train = 7
-    prob_lis = ["0_prob", "1_prob", "2_prob"]
+    num_train = 8
     for i in range(num_train):
         rand = random.randint(1, 1000)
         random.seed(rand)
@@ -95,31 +94,50 @@ def stock_main(engine: Engine):
             },
             verbose=1,
         )
-        regime_pred = regime_model.predict_proba(
+        regime_pred = regime_model.predict(
             X_regime,
         )
-        regime_prob = pd.DataFrame(regime_pred, columns=prob_lis)
         temp_df = pd.DataFrame({
             "stock_id": X_infer_id.flatten(),
             "return_pred": return_pred.flatten(),
             "vol_pred": vol_pred.flatten(),
             "drawdown_pred": drawdown_pred.flatten(),
+            "regime_pred": regime_pred,
         })
+
+        temp_df["return_pred"] = temp_df["return_pred"].rank(pct=True)
+        temp_df["vol_pred"] = temp_df["vol_pred"].rank(
+            pct=True, ascending=False)
+        temp_df["drawdown_pred"] = temp_df["drawdown_pred"].rank(
+            pct=True, ascending=False)
+
+        conditions = [
+            (temp_df['regime_pred'] == 2),
+            (temp_df['regime_pred'] == 0),
+            (temp_df['regime_pred'] == 1)
+        ]
+        return_weights = [0.70, 0.40, 0.10]
+        vol_weights = [0.15, 0.30, 0.45]
+        drawdown_weights = [0.15, 0.30, 0.45]
+        temp_df["w_r"] = np.select(conditions, return_weights)
+        temp_df["w_v"] = np.select(conditions, vol_weights)
+        temp_df["w_d"] = np.select(conditions, drawdown_weights)
+
         temp_df["stock_profile"] = temp_df["stock_id"].map(
             stock_profile_mapper_reversed)
         temp_df["result_score"] = (
-            temp_df["return_pred"] + (-0.5 * temp_df["vol_pred"]) + (-0.5 * temp_df["drawdown_pred"]))/3
+            (temp_df["w_r"] * temp_df["return_pred"]) +
+            (temp_df["w_v"] * temp_df["vol_pred"]) +
+            (temp_df["w_d"] * temp_df["drawdown_pred"])
+        )
+
         if i == 0:
             result_df["stock_profile"] = temp_df["stock_profile"]
         result_df[f"result_score{i}"] = temp_df["result_score"]
-        for prob in prob_lis:
-            result_df[f"{prob}_{i}"] = regime_prob[prob]
+        result_df[f"regime_pred{i}"] = temp_df["regime_pred"]
 
     result_df["score"] = result_df[[
         f'result_score{i}' for i in range(num_train)]].mean(axis=1)
-    for prob in prob_lis:
-        result_df[f"regime_{prob}"] = result_df[[
-            f'{prob}_{i}' for i in range(num_train)]].mean(axis=1)
 
     with pd.ExcelWriter(OUTPUT_PATH, engine="openpyxl") as writer:
         result_df.to_excel(

@@ -87,12 +87,10 @@ def make_regime_sequences(df: pd.DataFrame, features: list[str]):
 
 
 def make_inference_sequences(df: pd.DataFrame):
-    X, X_id = [], []
+    X, X_id, X_latest = [], [], []
     features = STOCK_FEATURE_COLS + INDEX_FEATURE_COLS + \
         CURRENCY_EXCHANGE_RATE_FEATURE_COLS
     latest_ts = df['timestamp'].max()
-    latest_df = df[df['timestamp'] == latest_ts]
-    X_latest = latest_df[features].values
     stock_profile_mapper = config_manager.stock_profile_mapper
     for stock_profile, g in df.groupby("stock_profile"):
         stock_id = stock_profile_mapper[stock_profile]
@@ -106,7 +104,8 @@ def make_inference_sequences(df: pd.DataFrame):
 
         if any(x > 0 for x in zero_volume_counts):
             continue
-
+        latest_df = g[g['timestamp'] == latest_ts]
+        X_latest.append(latest_df[features].values[0])
         X.append(values[-WINDOW:])
         X_id.append(stock_id)
 

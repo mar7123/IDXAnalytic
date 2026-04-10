@@ -74,7 +74,7 @@ def build_return_model(engine: Engine):
             metrics=[MeanAbsoluteError()]
         )
         print("TRAIN RETURN --------------------")
-        model.fit(
+        history = model.fit(
             x={
                 "ts_input": X_train,
                 "stock_id_input": X_train_id
@@ -96,6 +96,7 @@ def build_return_model(engine: Engine):
             ],
             verbose=2,
         )
+        best_val_loss = min(history.history['val_mean_absolute_error'])
         y_pred = model.predict(
             x={
                 "ts_input": X_val,
@@ -112,4 +113,4 @@ def build_return_model(engine: Engine):
             break
         config_manager.return_delta = new_delta
 
-    return model
+    return model, best_val_loss

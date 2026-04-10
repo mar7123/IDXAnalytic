@@ -66,9 +66,14 @@ def build_regime_model(engine: Engine, rand: int):
             lgb.log_evaluation(period=100),
         ],
     )
+    results = model.evals_result_
+
+    best_iter = model.best_iteration_
+    best_val_loss = results['valid_0']['multi_logloss'][best_iter - 1]
+
     feature_importances = pd.DataFrame({
         "features": features,
         "scores": model.feature_importances_,
     })
     print(feature_importances)
-    return model
+    return model, best_val_loss

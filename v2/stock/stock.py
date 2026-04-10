@@ -49,6 +49,59 @@ def clean_data(db_engine: Engine):
         connection.close()
 
 
+def stock_short_term(engine: Engine):
+    start_time = datetime.now()
+    prep_data(engine)
+    inference_df = load_inference(engine)
+    stock_profile_set: set[str] = set()
+    for stock_profile in inference_df["stock_profile"].values:
+        stock_profile_set.add(stock_profile)
+    config_manager.stock_profile_mapper = {label: i for i,
+                                           label in enumerate(sorted(stock_profile_set))}
+    stock_profile_mapper_reversed = {
+        v: k for k, v in config_manager.stock_profile_mapper.items()}
+    X_infer, X_infer_id, X_regime = make_inference_sequences(inference_df)
+    result_df = pd.DataFrame()
+    val_loss_df = pd.DataFrame()
+    num_train = 8
+    prob_lis = ["0_prob", "1_prob", "2_prob"]
+    for i in range(num_train):
+        rand = random.randint(1, 1000)
+        random.seed(rand)
+        tf.random.set_seed(rand)
+        np.random.seed(rand)
+        regime_model, regime_val_loss = build_regime_model(
+            engine=engine, rand=rand)
+        regime_pred = regime_model.predict_proba(
+            X_regime,
+        )
+        regime_prob = pd.DataFrame(regime_pred, columns=prob_lis)
+        val_loss_df[f"regime_model_val{i}"] = [regime_val_loss]
+        temp_df = pd.DataFrame({
+            "stock_id": X_infer_id.flatten(),
+        })
+        temp_df["stock_profile"] = temp_df["stock_id"].map(
+            stock_profile_mapper_reversed)
+        if i == 0:
+            result_df["stock_profile"] = temp_df["stock_profile"]
+        for prob in prob_lis:
+            result_df[f"{prob}_{i}"] = regime_prob[prob]
+    for prob in prob_lis:
+        result_df[f"regime_{prob}"] = result_df[[
+            f'{prob}_{i}' for i in range(num_train)]].mean(axis=1)
+
+    with pd.ExcelWriter(OUTPUT_PATH, engine="openpyxl") as writer:
+        result_df.to_excel(
+            writer, sheet_name="result_df", index=False)
+        val_loss_df.to_excel(
+            writer, sheet_name="val_loss_df", index=False)
+
+    clean_data(engine)
+    end_time = datetime.now()
+    duration = end_time-start_time
+    print(duration)
+
+
 def stock_main(engine: Engine):
     start_time = datetime.now()
     prep_data(engine)
@@ -62,16 +115,18 @@ def stock_main(engine: Engine):
         v: k for k, v in config_manager.stock_profile_mapper.items()}
     X_infer, X_infer_id, X_regime = make_inference_sequences(inference_df)
     result_df = pd.DataFrame()
+    val_loss_df = pd.DataFrame()
     num_train = 8
     for i in range(num_train):
         rand = random.randint(1, 1000)
         random.seed(rand)
         tf.random.set_seed(rand)
         np.random.seed(rand)
-        return_model = build_return_model(engine=engine)
-        vol_model = build_vol_model(engine=engine)
-        drawdown_model = build_drawdown_model(engine=engine)
-        regime_model = build_regime_model(engine=engine, rand=rand)
+        return_model, return_val_loss = build_return_model(engine=engine)
+        vol_model, vol_val_loss = build_vol_model(engine=engine)
+        drawdown_model, drawdown_val_loss = build_drawdown_model(engine=engine)
+        regime_model, regime_val_loss = build_regime_model(
+            engine=engine, rand=rand)
 
         return_pred = return_model.predict(
             x={
@@ -97,6 +152,11 @@ def stock_main(engine: Engine):
         regime_pred = regime_model.predict(
             X_regime,
         )
+        val_loss_df[f"return_model_val{i}"] = [return_val_loss]
+        val_loss_df[f"vol_model_val{i}"] = [vol_val_loss]
+        val_loss_df[f"drawdown_model_val{i}"] = [drawdown_val_loss]
+        val_loss_df[f"regime_model_val{i}"] = [regime_val_loss]
+
         temp_df = pd.DataFrame({
             "stock_id": X_infer_id.flatten(),
             "return_pred": return_pred.flatten(),
@@ -112,13 +172,13 @@ def stock_main(engine: Engine):
             pct=True, ascending=False)
 
         conditions = [
-            (temp_df['regime_pred'] == 2),
             (temp_df['regime_pred'] == 0),
-            (temp_df['regime_pred'] == 1)
+            (temp_df['regime_pred'] == 1),
+            (temp_df['regime_pred'] == 2),
         ]
-        return_weights = [0.70, 0.40, 0.10]
-        vol_weights = [0.15, 0.30, 0.45]
-        drawdown_weights = [0.15, 0.30, 0.45]
+        return_weights = [0.1, 0.4, 0.7]
+        vol_weights = [0.6, 0.3, 0.1]
+        drawdown_weights = [0.6, 0.3, 0.1]
         temp_df["w_r"] = np.select(conditions, return_weights)
         temp_df["w_v"] = np.select(conditions, vol_weights)
         temp_df["w_d"] = np.select(conditions, drawdown_weights)
@@ -138,10 +198,14 @@ def stock_main(engine: Engine):
 
     result_df["score"] = result_df[[
         f'result_score{i}' for i in range(num_train)]].mean(axis=1)
+    result_df["score_std"] = result_df[[
+        f'result_score{i}' for i in range(num_train)]].std(axis=1)
 
     with pd.ExcelWriter(OUTPUT_PATH, engine="openpyxl") as writer:
         result_df.to_excel(
             writer, sheet_name="result_df", index=False)
+        val_loss_df.to_excel(
+            writer, sheet_name="val_loss_df", index=False)
 
     clean_data(engine)
     end_time = datetime.now()

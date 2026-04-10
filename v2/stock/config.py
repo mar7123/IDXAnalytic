@@ -12,10 +12,6 @@ INDEX_FEATURE_COLS = [
     "idx_vol_60d_n",
     "idx_drawdown_20d_n",
     "idx_drawdown_60d_n",
-    "relative_ret_1d_n",
-    "relative_ret_5d_n",
-    "relative_ret_20d_n",
-    "relative_ret_60d_n",
 ]
 
 CURRENCY_EXCHANGE_RATE_FEATURE_COLS = [

@@ -12,15 +12,9 @@ def make_return_sequences(df: pd.DataFrame):
         g.sort_values("timestamp", inplace=True)
         values = g[STOCK_FEATURE_COLS + INDEX_FEATURE_COLS +
                    CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
-        zero_volume_counts = g["zero_volume_count"].values
         targets = g["future_return"].values
-        future_vols = g["future_volume"].values
 
         for i in range(len(g) - WINDOW):
-            zero_volume_count = zero_volume_counts[i:i+WINDOW]
-            future_vol = future_vols[i+WINDOW]
-            if future_vol == 0 or any(x > 0 for x in zero_volume_count):
-                continue
             X.append(values[i:i+WINDOW])
             X_id.append(stock_id)
             y.append(targets[i+WINDOW])
@@ -37,15 +31,9 @@ def make_vol_sequences(df: pd.DataFrame):
         g.sort_values("timestamp", inplace=True)
         values = g[STOCK_FEATURE_COLS + INDEX_FEATURE_COLS +
                    CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
-        zero_volume_counts = g["zero_volume_count"].values
         targets = g["future_vol"].values
-        zero_future_volumes = g["zero_future_volume"].values
 
         for i in range(len(g) - WINDOW):
-            zero_volume_count = zero_volume_counts[i:i+WINDOW]
-            zero_future_volume = zero_future_volumes[i+WINDOW]
-            if zero_future_volume == 1 or any(x > 0 for x in zero_volume_count):
-                continue
             X.append(values[i:i+WINDOW])
             X_id.append(stock_id)
             y.append(targets[i+WINDOW])
@@ -61,15 +49,9 @@ def make_drawdown_sequences(df: pd.DataFrame):
         g.sort_values("timestamp", inplace=True)
         values = g[STOCK_FEATURE_COLS + INDEX_FEATURE_COLS +
                    CURRENCY_EXCHANGE_RATE_FEATURE_COLS].values
-        zero_volume_counts = g["zero_volume_count"].values
-        zero_future_volumes = g["zero_future_volume"].values
         targets = g["future_drawdown"].values
 
         for i in range(len(g) - WINDOW):
-            zero_volume_count = zero_volume_counts[i:i+WINDOW]
-            zero_future_volume = zero_future_volumes[i+WINDOW]
-            if zero_future_volume == 1 or any(x > 0 for x in zero_volume_count):
-                continue
             X.append(values[i:i+WINDOW])
             X_id.append(stock_id)
             y.append(targets[i+WINDOW])
@@ -79,8 +61,6 @@ def make_drawdown_sequences(df: pd.DataFrame):
 
 def make_regime_sequences(df: pd.DataFrame, features: list[str]):
     X,  y = [], []
-    df.drop(df[df["future_volume"] == 0].index, inplace=True)
-    df.drop(df[df["zero_volume_count"] > 0].index, inplace=True)
     X = df[features].values
     y = df["future_regime"].values
     return np.array(X), np.array(y)
@@ -100,10 +80,6 @@ def make_inference_sequences(df: pd.DataFrame):
 
         values = g[features].values
 
-        zero_volume_counts = g["zero_volume_count"].values[-WINDOW:]
-
-        if any(x > 0 for x in zero_volume_counts):
-            continue
         latest_df = g[g['timestamp'] == latest_ts]
         X_latest.append(latest_df[features].values[0])
         X.append(values[-WINDOW:])

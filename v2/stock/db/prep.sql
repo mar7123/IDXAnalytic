@@ -152,12 +152,29 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
         stock_profile,
         timestamp,
         close,
-        -- suspension check
-        volume,
+        CASE
+            WHEN bid_volume != 0
+            OR offer_volume != 0 THEN 1
+            ELSE 0
+        END AS is_active,
         -- derived features
-        LN(1 + (volume / NULLIF(tradeble_shares, 0))) AS turnover,
-        (foreign_buy - foreign_sell) / NULLIF(volume, 0) AS foreign_flow,
-        (bid_volume - offer_volume) / NULLIF(bid_volume + offer_volume, 0) AS order_imbalance,
+        LN(
+            1 + (
+                CASE
+                    WHEN tradeble_shares != 0 THEN volume / tradeble_shares
+                    ELSE 0
+                END
+            )
+        ) AS turnover,
+        CASE
+            WHEN volume != 0 THEN (foreign_buy - foreign_sell) / volume
+            ELSE 0
+        END AS foreign_flow,
+        CASE
+            WHEN bid_volume != 0
+            OR offer_volume != 0 THEN (bid_volume - offer_volume) / (bid_volume + offer_volume)
+            ELSE 0
+        END AS order_imbalance,
         (offer - bid) / NULLIF(close, 0) AS spread_proxy,
         -- returns
         LN((close / LAG(close, 1) OVER w20)) AS ret_1d,
@@ -255,14 +272,6 @@ CREATE TEMPORARY TABLE model_target AS WITH base AS (
         timestamp,
         -- step counter
         COUNT(*) OVER (PARTITION BY stock_profile) as total_step,
-        -- suspension check
-        (LEAD(volume, @HORIZON) OVER w) AS future_volume,
-        MAX(
-            CASE
-                WHEN volume = 0 THEN 1
-                ELSE 0
-            END
-        ) OVER w AS zero_future_volume,
         -- future target
         LN(
             LEAD(close, @HORIZON) OVER w / LEAD(close, 1) OVER w
@@ -296,13 +305,7 @@ CREATE TEMPORARY TABLE stock_data_normalized AS WITH base AS (
     SELECT
         stock_profile,
         timestamp,
-        -- suspension check
-        SUM(volume = 0) OVER (
-            PARTITION BY stock_profile
-            ORDER BY
-                timestamp ROWS BETWEEN 60 PRECEDING
-                AND CURRENT ROW
-        ) AS zero_volume_count,
+        is_active,
         (turnover - AVG(turnover) OVER w) / COALESCE(
             NULLIF(STDDEV_SAMP(turnover) OVER w, 0),
             0.00000001
@@ -489,7 +492,7 @@ CREATE TEMPORARY TABLE stock_data_normalized AS WITH base AS (
 SELECT
     stock_profile,
     timestamp,
-    zero_volume_count,
+    is_active,
     turnover_n,
     foreign_flow_n,
     order_imbalance_n,
@@ -545,8 +548,6 @@ SELECT
             sdn.timestamp DESC
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
-    -- Suspension Check
-    mt.future_volume,
     -- Target
     (
         mt.future_return - AVG(mt.future_return) OVER wt
@@ -573,8 +574,6 @@ SELECT
             sdn.timestamp DESC
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
-    -- Suspension Check
-    mt.zero_future_volume,
     -- Target
     (
         mt.future_vol - AVG(mt.future_vol) OVER wt
@@ -601,8 +600,6 @@ SELECT
             sdn.timestamp DESC
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
-    -- Suspension Check
-    mt.zero_future_volume,
     -- Target
     (
         mt.future_drawdown - AVG(mt.future_drawdown) OVER wt
@@ -629,8 +626,6 @@ SELECT
             sdn.timestamp DESC
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) AS total_step,
-    -- Suspension Check
-    mt.future_volume,
     -- Target
     mt.future_regime
 FROM

@@ -116,7 +116,7 @@ def stock_main(engine: Engine):
     X_infer, X_infer_id, X_regime = make_inference_sequences(inference_df)
     result_df = pd.DataFrame()
     val_loss_df = pd.DataFrame()
-    num_train = 8
+    num_train = 2
     for i in range(num_train):
         rand = random.randint(1, 1000)
         random.seed(rand)

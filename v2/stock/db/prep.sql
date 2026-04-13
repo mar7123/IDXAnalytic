@@ -152,12 +152,23 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
         stock_profile,
         timestamp,
         close,
+        -- derived features
         CASE
-            WHEN bid_volume != 0
-            OR offer_volume != 0 THEN 1
+            WHEN bid_volume + offer_volume != 0 THEN 1
             ELSE 0
         END AS is_active,
-        -- derived features
+        CASE
+            WHEN SUM(bid_volume + offer_volume) OVER w5 != 0 THEN 1
+            ELSE 0
+        END AS is_active_5d,
+        CASE
+            WHEN SUM(bid_volume + offer_volume) OVER w20 != 0 THEN 1
+            ELSE 0
+        END AS is_active_20d,
+        CASE
+            WHEN SUM(bid_volume + offer_volume) OVER w60 != 0 THEN 1
+            ELSE 0
+        END AS is_active_60d,
         LN(
             1 + (
                 CASE
@@ -204,7 +215,13 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
     FROM
         stock_data
     WHERE
-        timestamp >= @MIN_DATE WINDOW w20 AS (
+        timestamp >= @MIN_DATE WINDOW w5 AS (
+            PARTITION BY stock_profile
+            ORDER BY
+                timestamp ROWS BETWEEN 4 PRECEDING
+                AND CURRENT ROW
+        ),
+        w20 AS (
             PARTITION BY stock_profile
             ORDER BY
                 timestamp ROWS BETWEEN 19 PRECEDING
@@ -306,6 +323,9 @@ CREATE TEMPORARY TABLE stock_data_normalized AS WITH base AS (
         stock_profile,
         timestamp,
         is_active,
+        is_active_5d,
+        is_active_20d,
+        is_active_60d,
         (turnover - AVG(turnover) OVER w) / COALESCE(
             NULLIF(STDDEV_SAMP(turnover) OVER w, 0),
             0.00000001
@@ -493,6 +513,9 @@ SELECT
     stock_profile,
     timestamp,
     is_active,
+    is_active_5d,
+    is_active_20d,
+    is_active_60d,
     turnover_n,
     foreign_flow_n,
     order_imbalance_n,

@@ -27,6 +27,9 @@ CURRENCY_EXCHANGE_RATE_FEATURE_COLS = [
 
 STOCK_FEATURE_COLS = [
     "is_active",
+    "is_active_5d",
+    "is_active_20d",
+    "is_active_60d",
     "turnover_n",
     "foreign_flow_n",
     "order_imbalance_n",

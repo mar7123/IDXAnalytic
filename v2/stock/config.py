@@ -33,6 +33,8 @@ STOCK_FEATURE_COLS = [
     "turnover_n",
     "foreign_flow_n",
     "order_imbalance_n",
+    "relative_spread_n",
+    "non_regular_activity_n",
     "spread_proxy_n",
     "ret_1d_n",
     "ret_5d_n",
@@ -51,6 +53,10 @@ STOCK_FEATURE_COLS = [
     "woy_cos",
     "month_sin",
     "month_cos",
+    "excess_ret_1d_n",
+    "excess_ret_5d_n",
+    "excess_ret_20d_n",
+    "excess_ret_60d_n",
 ]
 
 

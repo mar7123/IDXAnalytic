@@ -12,8 +12,6 @@ DROP TABLE IF EXISTS stock_vol_normalized;
 
 DROP TABLE IF EXISTS stock_drawdown_normalized;
 
-DROP TABLE IF EXISTS stock_regime_normalized;
-
 DROP TABLE IF EXISTS stock_return_train;
 
 DROP TABLE IF EXISTS stock_return_val;
@@ -25,9 +23,5 @@ DROP TABLE IF EXISTS stock_vol_val;
 DROP TABLE IF EXISTS stock_drawdown_train;
 
 DROP TABLE IF EXISTS stock_drawdown_val;
-
-DROP TABLE IF EXISTS stock_regime_train;
-
-DROP TABLE IF EXISTS stock_regime_val;
 
 DROP TABLE IF EXISTS stock_inference;

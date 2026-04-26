@@ -7,8 +7,9 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import Engine
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from stock.config import WINDOW, config_manager
+from stock.config import CURRENCY_EXCHANGE_RATE_FEATURE_COLS, INDEX_FEATURE_COLS, STOCK_FEATURE_COLS, WINDOW, config_manager
 from stock.dataset import make_drawdown_sequences
+import lightgbm as lgb
 
 
 def load_drawdown_training(db_engine: Engine) -> pd.DataFrame:
@@ -33,12 +34,18 @@ def load_drawdown_test(db_engine: Engine) -> pd.DataFrame:
     return df
 
 
-def build_drawdown_model(engine: Engine):
+def build_drawdown_model(engine: Engine, rand: int):
     train_df = load_drawdown_training(engine)
     val_df = load_drawdown_test(engine)
+
+    features = STOCK_FEATURE_COLS + INDEX_FEATURE_COLS + \
+        CURRENCY_EXCHANGE_RATE_FEATURE_COLS
+
     stock_profile_mapper = config_manager.stock_profile_mapper
-    X_train, X_train_id, y_train = make_drawdown_sequences(train_df)
-    X_val, X_val_id, y_val = make_drawdown_sequences(val_df)
+    X_train, X_train_id, y_train, X_train_tree, y_train_tree = make_drawdown_sequences(
+        df=train_df, features=features)
+    X_val, X_val_id, y_val, X_val_tree, y_val_tree = make_drawdown_sequences(
+        df=val_df, features=features)
 
     ts_input = Input(shape=(WINDOW, X_train.shape[-1]), name="ts_input")
 
@@ -112,4 +119,42 @@ def build_drawdown_model(engine: Engine):
         if abs(config_manager.drawdown_delta-new_delta) < 0.2:
             break
         config_manager.drawdown_delta = new_delta
-    return model, best_val_loss
+
+    tree_model = lgb.LGBMRegressor(
+        objective='huber',
+        alpha=config_manager.drawdown_delta,
+        num_leaves=128,
+        min_child_samples=100,
+        colsample_bytree=0.8,
+        subsample=0.8,
+        subsample_freq=5,
+        learning_rate=1e-4,
+        n_estimators=10000,
+        importance_type='gain',
+        random_state=rand,
+    )
+
+    tree_model.fit(
+        X_train_tree, y_train_tree,
+        eval_set=[(X_val_tree, y_val_tree)],
+        eval_metric=['mae'],
+        callbacks=[
+            lgb.early_stopping(
+                stopping_rounds=100,
+                min_delta=1e-5,
+            ),
+            lgb.log_evaluation(period=100),
+        ],
+    )
+    tree_results = tree_model.evals_result_
+
+    tree_best_iter = tree_model.best_iteration_
+    tree_best_val_loss = tree_results['valid_0']['l1'][tree_best_iter - 1]
+
+    feature_importances = pd.DataFrame({
+        "features": features,
+        "scores": tree_model.feature_importances_,
+    })
+    print(feature_importances)
+
+    return model, best_val_loss, tree_model, tree_best_val_loss

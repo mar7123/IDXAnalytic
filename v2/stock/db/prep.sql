@@ -182,11 +182,18 @@ CREATE TEMPORARY TABLE stock_base AS WITH base as (
             ELSE 0
         END AS foreign_flow,
         CASE
-            WHEN bid_volume != 0
-            OR offer_volume != 0 THEN (bid_volume - offer_volume) / (bid_volume + offer_volume)
+            WHEN bid_volume + offer_volume != 0 THEN (bid_volume - offer_volume) / (bid_volume + offer_volume)
             ELSE 0
         END AS order_imbalance,
         (offer - bid) / NULLIF(close, 0) AS spread_proxy,
+        CASE
+            WHEN offer + bid != 0 THEN (offer - bid) / ((offer + bid) / 2)
+            ELSE 0
+        END AS relative_spread,
+        CASE
+            WHEN volume != 0 THEN non_regular_volume / volume
+            ELSE 0
+        END AS non_regular_activity,
         -- returns
         LN((close / LAG(close, 1) OVER w20)) AS ret_1d,
         LN((close / LAG(close, 5) OVER w20)) AS ret_5d,
@@ -257,6 +264,10 @@ window_base AS (
 )
 SELECT
     wb.*,
+    wb.ret_1d - mb.idx_ret_1d AS excess_ret_1d,
+    wb.ret_5d - mb.idx_ret_5d AS excess_ret_5d,
+    wb.ret_20d - mb.idx_ret_20d AS excess_ret_20d,
+    wb.ret_60d - mb.idx_ret_60d AS excess_ret_60d,
     mb.idx_close_pos,
     mb.idx_range,
     mb.idx_ret_1d,
@@ -279,7 +290,7 @@ FROM
     window_base wb
     INNER JOIN market_base mb ON wb.timestamp = mb.timestamp
 WHERE
-    ret_60d IS NOT NULL;
+    wb.ret_60d IS NOT NULL;
 
 DROP TABLE IF EXISTS model_target;
 
@@ -304,17 +315,41 @@ CREATE TEMPORARY TABLE model_target AS WITH base AS (
         )
 )
 SELECT
-    *,
-    CASE
-        WHEN future_return < LN(0.92) THEN 0
-        WHEN future_return > LN(1.08) THEN 2
-        ELSE 1
-    END AS future_regime
+    stock_profile,
+    timestamp,
+    total_step,
+    (
+        b.future_return - AVG(b.future_return) OVER wt
+    ) / COALESCE(
+        NULLIF(
+            STDDEV(b.future_return) OVER wt,
+            0
+        ),
+        0.00000001
+    ) AS future_return,
+    (
+        b.future_vol - AVG(b.future_vol) OVER wt
+    ) / COALESCE(
+        NULLIF(
+            STDDEV(b.future_vol) OVER wt,
+            0
+        ),
+        0.00000001
+    ) AS future_vol,
+    (
+        b.future_drawdown - AVG(b.future_drawdown) OVER wt
+    ) / COALESCE(
+        NULLIF(
+            STDDEV(b.future_drawdown) OVER wt,
+            0
+        ),
+        0.00000001
+    ) AS future_drawdown
 FROM
-    base
+    base b
 WHERE
-    future_return IS NOT NULL
-    AND ROUND(total_step * @VAL_RATIO) > (@WINDOW + @HORIZON + 1);
+    b.future_return IS NOT NULL
+    AND ROUND(total_step * @VAL_RATIO) > (@WINDOW + @HORIZON + 1) WINDOW wt AS (PARTITION BY b.timestamp);
 
 DROP TABLE IF EXISTS stock_data_normalized;
 
@@ -338,6 +373,16 @@ CREATE TEMPORARY TABLE stock_data_normalized AS WITH base AS (
             NULLIF(STDDEV_SAMP(order_imbalance) OVER w, 0),
             0.00000001
         ) AS order_imbalance_n,
+        (relative_spread - AVG(relative_spread) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(relative_spread) OVER w, 0),
+            0.00000001
+        ) AS relative_spread_n,
+        (
+            non_regular_activity - AVG(non_regular_activity) OVER w
+        ) / COALESCE(
+            NULLIF(STDDEV_SAMP(non_regular_activity) OVER w, 0),
+            0.00000001
+        ) AS non_regular_activity_n,
         (spread_proxy - AVG(spread_proxy) OVER w) / COALESCE(
             NULLIF(STDDEV_SAMP(spread_proxy) OVER w, 0),
             0.00000001
@@ -380,6 +425,22 @@ CREATE TEMPORARY TABLE stock_data_normalized AS WITH base AS (
             NULLIF(STDDEV_SAMP(vol_60d) OVER w, 0),
             0.00000001
         ) AS vol_60d_n,
+        (excess_ret_1d - AVG(excess_ret_1d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(excess_ret_1d) OVER w, 0),
+            0.00000001
+        ) AS excess_ret_1d_n,
+        (excess_ret_5d - AVG(excess_ret_5d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(excess_ret_5d) OVER w, 0),
+            0.00000001
+        ) AS excess_ret_5d_n,
+        (excess_ret_20d - AVG(excess_ret_20d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(excess_ret_20d) OVER w, 0),
+            0.00000001
+        ) AS excess_ret_20d_n,
+        (excess_ret_60d - AVG(excess_ret_60d) OVER w) / COALESCE(
+            NULLIF(STDDEV_SAMP(excess_ret_60d) OVER w, 0),
+            0.00000001
+        ) AS excess_ret_60d_n,
         idx_close_pos,
         (idx_range - AVG(idx_range) OVER w) / COALESCE(
             NULLIF(STDDEV_SAMP(idx_range) OVER w, 0),
@@ -519,6 +580,8 @@ SELECT
     turnover_n,
     foreign_flow_n,
     order_imbalance_n,
+    relative_spread_n,
+    non_regular_activity_n,
     spread_proxy_n,
     ret_1d_n,
     ret_5d_n,
@@ -531,6 +594,10 @@ SELECT
     drawdown_60d_n,
     vol_20d_n,
     vol_60d_n,
+    excess_ret_1d_n,
+    excess_ret_5d_n,
+    excess_ret_20d_n,
+    excess_ret_60d_n,
     idx_close_pos,
     idx_range_n,
     idx_ret_1d_n,
@@ -572,19 +639,18 @@ SELECT
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
     -- Target
-    (
-        mt.future_return - AVG(mt.future_return) OVER wt
-    ) / COALESCE(
-        NULLIF(
-            STDDEV(mt.future_return) OVER wt,
-            0
-        ),
-        0.00000001
-    ) AS future_return
+    mt.future_return,
+    CASE
+        WHEN mt.future_return < -1.5 THEN 0
+        WHEN mt.future_return < -0.8 THEN 1
+        WHEN mt.future_return < 0.8 THEN 2
+        WHEN mt.future_return < 1.5 THEN 3
+        ELSE 4
+    END as future_return_class
 FROM
     stock_data_normalized sdn
     INNER JOIN model_target mt ON sdn.timestamp = mt.timestamp
-    AND sdn.stock_profile = mt.stock_profile WINDOW wt AS (PARTITION BY mt.timestamp);
+    AND sdn.stock_profile = mt.stock_profile;
 
 DROP TABLE IF EXISTS stock_vol_normalized;
 
@@ -598,19 +664,18 @@ SELECT
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
     -- Target
-    (
-        mt.future_vol - AVG(mt.future_vol) OVER wt
-    ) / COALESCE(
-        NULLIF(
-            STDDEV(mt.future_vol) OVER wt,
-            0
-        ),
-        0.00000001
-    ) AS future_vol
+    mt.future_vol,
+    CASE
+        WHEN mt.future_vol < -1.5 THEN 0
+        WHEN mt.future_vol < -0.8 THEN 1
+        WHEN mt.future_vol < 0.8 THEN 2
+        WHEN mt.future_vol < 1.5 THEN 3
+        ELSE 4
+    END as future_vol_class
 FROM
     stock_data_normalized sdn
     JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
-    AND sdn.timestamp = mt.timestamp WINDOW wt AS (PARTITION BY mt.timestamp);
+    AND sdn.timestamp = mt.timestamp;
 
 DROP TABLE IF EXISTS stock_drawdown_normalized;
 
@@ -624,33 +689,14 @@ SELECT
     ) AS step_count,
     COUNT(*) OVER (PARTITION BY sdn.stock_profile) as total_step,
     -- Target
-    (
-        mt.future_drawdown - AVG(mt.future_drawdown) OVER wt
-    ) / COALESCE(
-        NULLIF(
-            STDDEV(mt.future_drawdown) OVER wt,
-            0
-        ),
-        0.00000001
-    ) AS future_drawdown
-FROM
-    stock_data_normalized sdn
-    JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
-    AND sdn.timestamp = mt.timestamp WINDOW wt AS (PARTITION BY mt.timestamp);
-
-DROP TABLE IF EXISTS stock_regime_normalized;
-
-CREATE TEMPORARY TABLE stock_regime_normalized AS
-SELECT
-    sdn.*,
-    ROW_NUMBER() OVER (
-        PARTITION BY sdn.stock_profile
-        ORDER BY
-            sdn.timestamp DESC
-    ) AS step_count,
-    COUNT(*) OVER (PARTITION BY sdn.stock_profile) AS total_step,
-    -- Target
-    mt.future_regime
+    mt.future_drawdown,
+    CASE
+        WHEN mt.future_drawdown < -1.5 THEN 0
+        WHEN mt.future_drawdown < -0.8 THEN 1
+        WHEN mt.future_drawdown < 0.8 THEN 2
+        WHEN mt.future_drawdown < 1.5 THEN 3
+        ELSE 4
+    END as future_drawdown_class
 FROM
     stock_data_normalized sdn
     JOIN model_target mt ON sdn.stock_profile = mt.stock_profile
@@ -713,26 +759,6 @@ SELECT
     *
 FROM
     stock_drawdown_normalized
-WHERE
-    step_count <= ROUND(total_step * @VAL_RATIO, 0);
-
-DROP TABLE IF EXISTS stock_regime_train;
-
-DROP TABLE IF EXISTS stock_regime_val;
-
-CREATE TABLE stock_regime_train AS
-SELECT
-    *
-FROM
-    stock_regime_normalized
-WHERE
-    step_count > ROUND(total_step * @VAL_RATIO, 0);
-
-CREATE TABLE stock_regime_val AS
-SELECT
-    *
-FROM
-    stock_regime_normalized
 WHERE
     step_count <= ROUND(total_step * @VAL_RATIO, 0);
 
